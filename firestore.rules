@@ -1,0 +1,100 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        request.auth.token.email != null &&
+        request.auth.token.email in [
+          "nccrvce2025@gmail.com",
+          "nccrvceshaurya@gmail.com",
+          "lokakshas.cs24@rvce.edu.in",
+          "shaurya.lakshya.admin@gmail.com"
+        ];
+    }
+
+    // Default deny for all unspecified paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Main application collection namespace
+    match /artifacts/{appId}/public/data {
+      
+      // -------------------------------------------------------------
+      // 1. ALLOWED EMAILS (Whitelist)
+      // -------------------------------------------------------------
+      match /allowed_emails/{emailId} {
+        // Authenticated sessions (including candidate anonymous auth) can read whitelist
+        allow read: if isAuthenticated();
+        // Only verified command personnel can add or revoke whitelist entries
+        allow create, update, delete: if isAdmin();
+      }
+
+      // -------------------------------------------------------------
+      // 2. SLOTS (Duty Schedule & Capacity)
+      // -------------------------------------------------------------
+      match /slots/{slotId} {
+        // Public/candidate access to view available schedule and capacity
+        allow read: if isAuthenticated();
+        
+        // Only authorized admins can create or delete slots
+        allow create, delete: if isAdmin();
+        
+        // Updates: Admins have full access; Public booking can ONLY increment 'booked' by 1 within capacity
+        allow update: if isAdmin() || (
+          isAuthenticated() &&
+          // Enforce that only the 'booked' field is modified
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['booked']) &&
+          // Enforce strictly incrementing booked by 1
+          request.resource.data.booked == resource.data.booked + 1 &&
+          // Enforce that booked count never exceeds slot capacity
+          request.resource.data.booked <= resource.data.capacity
+        );
+      }
+
+      // -------------------------------------------------------------
+      // 3. PARTICIPANTS (Registrations, Passes, QR Tokens, Scores)
+      // -------------------------------------------------------------
+      match /participants/{participantId} {
+        // Read access for live leaderboards, pass verification, and duplicate check
+        allow read: if isAuthenticated();
+
+        // Creation: Either an admin, or a legitimate candidate booking
+        allow create: if isAdmin() || (
+          isAuthenticated() &&
+          // Required participant schema fields
+          request.resource.data.name is string &&
+          request.resource.data.name.size() > 0 &&
+          request.resource.data.name.size() <= 100 &&
+          request.resource.data.email is string &&
+          request.resource.data.email.size() > 3 &&
+          request.resource.data.email.size() <= 120 &&
+          request.resource.data.gender in ['Male', 'Female'] &&
+          request.resource.data.category in ['Air Rifle', 'Pistol'] &&
+          request.resource.data.ticketId is string &&
+          request.resource.data.qrToken is string &&
+          request.resource.data.slotId is string &&
+          // Security fields must be initial state only (not checked in, no scores)
+          request.resource.data.checkedIn == false &&
+          request.resource.data.checkedInAt == null &&
+          request.resource.data.checkedInBy == null &&
+          request.resource.data.totalScore == 0
+        );
+
+        // Updates: STRICTLY ADMIN ONLY.
+        // Prevents tampering with scores, check-in flags, tokens, categories, or names.
+        allow update: if isAdmin();
+
+        // Deletion: STRICTLY ADMIN ONLY.
+        allow delete: if isAdmin();
+      }
+    }
+  }
+}

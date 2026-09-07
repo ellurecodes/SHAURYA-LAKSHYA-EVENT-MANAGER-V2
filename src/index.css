@@ -1,0 +1,9 @@
+
+@import "tailwindcss";
+@import "./App.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Smooth scrolling for the carousel */
+html { scroll-behavior: smooth; }
