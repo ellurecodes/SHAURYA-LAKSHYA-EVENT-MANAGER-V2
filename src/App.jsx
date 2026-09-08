@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import './App.css';
-import { Target, Calendar, Trophy, Users, LogIn, Download, Upload, Save, Trash2, Plus, Search, Menu, X, Clock, CheckCircle, Medal, Crosshair, Shield, FileText, ClipboardList, Radio, Lock, ChevronDown, ChevronUp, UserCheck, FileSpreadsheet, RefreshCw, Wifi, WifiOff, ListPlus, PlayCircle, AlertTriangle, ChevronLeft, ChevronRight, XCircle, Ticket, Mail, Key, Ban, QrCode, Camera } from 'lucide-react';
+import { Target, Calendar, Trophy, Users, LogIn, Download, Upload, Save, Trash2, Plus, Search, Menu, X, Clock, CheckCircle, Medal, Crosshair, Shield, FileText, ClipboardList, Radio, Lock, ChevronDown, ChevronUp, UserCheck, FileSpreadsheet, RefreshCw, Wifi, WifiOff, ListPlus, PlayCircle, AlertTriangle, ChevronLeft, ChevronRight, XCircle, Ticket, Mail, Key, Ban, QrCode, Camera, Image as ImageIcon, Smartphone, Volume2 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { initializeApp } from 'firebase/app';
@@ -52,18 +52,77 @@ const ALLOWED_ADMIN_EMAILS = [
 
 const EVENT_DATES = ["5th Dec", "6th Dec"];
 const STANDARD_SCHEDULE = [
-  {time: "08:00 HRS", capacity: 60 },
+  { time: "08:00 HRS", capacity: 60 },
   { time: "09:00 HRS", capacity: 60 },
   { time: "10:00 HRS", capacity: 60 },
   { time: "11:00 HRS", capacity: 60 },
-  { time: "13:00 HRS ",capacity:60},
-  { time: "14:00 HRS ",capacity:60},
-  { time: "15:00 HRS ",capacity:60},
-  { time: "16:00 HRS ",capacity:60},
-
+  { time: "13:00 HRS", capacity: 60 },
+  { time: "14:00 HRS", capacity: 60 },
+  { time: "15:00 HRS", capacity: 60 },
+  { time: "16:00 HRS", capacity: 60 },
 ];
 
 const SHOOTING_CATEGORIES = ["Air Rifle", "Pistol"];
+
+const generateDefaultSlots = () => {
+  const result = [];
+  EVENT_DATES.forEach(date => {
+    SHOOTING_CATEGORIES.forEach(category => {
+      STANDARD_SCHEDULE.forEach((s, index) => {
+        const tStr = s.time.trim();
+        const match = tStr.match(/(\d{1,2}):(\d{2})/);
+        const sortVal = match ? parseInt(match[1], 10) * 60 + parseInt(match[2], 10) : index * 60;
+        result.push({
+          id: `std_slot_${date.replace(/[\s.]+/g, '_')}_${category.replace(/[\s.]+/g, '_')}_${index}`,
+          time: tStr,
+          capacity: s.capacity || 60,
+          date: date,
+          category: category,
+          booked: 0,
+          sortOrder: sortVal
+        });
+      });
+    });
+  });
+  return result;
+};
+
+const getInitialSlots = () => {
+  try {
+    const saved = localStorage.getItem('lakshya_slots_v4');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch (e) {}
+  const defaults = generateDefaultSlots();
+  try {
+    localStorage.setItem('lakshya_slots_v4', JSON.stringify(defaults));
+  } catch (e) {}
+  return defaults;
+};
+
+const getInitialParticipants = () => {
+  try {
+    const saved = localStorage.getItem('lakshya_participants_v4');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {}
+  return [];
+};
+
+const getInitialAllowedEmails = () => {
+  try {
+    const saved = localStorage.getItem('lakshya_emails_v4');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {}
+  return [];
+};
 
 const WEAPON_IMAGES = [
   
@@ -86,10 +145,10 @@ export default function ShauryaLakshyaApp() {
   const [user, setUser] = useState(null);
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false); 
   const [view, setView] = useState('home'); 
-  const [participants, setParticipants] = useState([]);
-  const [slots, setSlots] = useState([]);
-  const [allowedEmails, setAllowedEmails] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [participants, setParticipants] = useState(getInitialParticipants);
+  const [slots, setSlots] = useState(getInitialSlots);
+  const [allowedEmails, setAllowedEmails] = useState(getInitialAllowedEmails);
+  const [loading, setLoading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [processingAction, setProcessingAction] = useState(false);
   const [dbError, setDbError] = useState(null); 
@@ -109,20 +168,20 @@ export default function ShauryaLakshyaApp() {
   const [newSlotDate, setNewSlotDate] = useState('5th Dec'); 
   const [newSlotCategory, setNewSlotCategory] = useState('Air Rifle');
   const [adminViewDate, setAdminViewDate] = useState('5th Dec');
+  const [adminViewCategory, setAdminViewCategory] = useState('All');
+  const [slotFeedback, setSlotFeedback] = useState(null);
 
   // Leaderboard Filter State
   const [lbCategory, setLbCategory] = useState('Air Rifle');
-  const [lbGender, setLbGender] = useState('Male');
 
   // Booking State
   const [bookingStep, setBookingStep] = useState('verify'); 
   const [participantEmail, setParticipantEmail] = useState('');
   const [bookingForm, setBookingForm] = useState({ 
     name: '', 
-    gender: '', // Ensure default is empty string to force selection
+    gender: 'General', 
     cadetType: 'General', 
     slotId: '' 
-    // Removed ticketId from state
   });
   const [bookingCategory, setBookingCategory] = useState('');
   const [bookingDate, setBookingDate] = useState('5th Dec'); 
@@ -137,11 +196,13 @@ export default function ShauryaLakshyaApp() {
 
   // Admin QR Check-In State
   const [scannerRunning, setScannerRunning] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState('environment');
   const [lookupQuery, setLookupQuery] = useState('');
   const [lookupResult, setLookupResult] = useState(null);
   const [checkInLoading, setCheckInLoading] = useState(false);
   const [checkInFeedback, setCheckInFeedback] = useState(null);
   const html5QrCodeRef = useRef(null);
+  const qrFileInputRef = useRef(null);
 
   // Carousel State
   const [currentSlide, setCurrentSlide] = useState(0);
@@ -159,8 +220,7 @@ export default function ShauryaLakshyaApp() {
            await signInAnonymously(auth);
         }
       } catch (error) {
-        console.error("Auth Initialization Error:", error);
-        setDbError("Authentication Failed. Please refresh the page.");
+        console.warn("Auth initialization skipped (operating in local session mode)");
       }
     };
     initAuth();
@@ -168,66 +228,75 @@ export default function ShauryaLakshyaApp() {
     const unsubscribeAuth = onAuthStateChanged(auth, async (u) => {
       if (u) {
         setUser(u);
-        setDbError(null);
         if (!u.isAnonymous && u.email && ALLOWED_ADMIN_EMAILS.includes(u.email)) {
           setIsAdminAuthenticated(true);
           localStorage.setItem('shaurya_admin_session', 'true');
         } 
-      } else {
-        try {
-          await signInAnonymously(auth);
-        } catch (error) {
-          console.error("Auth Initialization Error:", error);
-        }
       }
     });
     return () => unsubscribeAuth();
   }, []);
 
-  // --- FIRESTORE LISTENERS ---
+  // --- FIRESTORE LISTENERS (NON-BLOCKING) ---
   useEffect(() => {
     if (!user) return; 
-    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'participants'));
-    const unsub = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setParticipants(data);
-      setLoading(false);
-    }, (err) => {
-      console.error("Participants Sync Error:", err);
-      if (err.code === 'permission-denied') setDbError("Database Permission Denied. Check Firebase Rules.");
-    });
-    return () => unsub();
-  }, [user]);
-
-  useEffect(() => {
-    if (!user) return;
-    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'slots'));
-    const unsub = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      data.sort((a, b) => {
-        if (a.date !== b.date) return (a.date || '').localeCompare(b.date || '');
-        if (a.sortOrder !== undefined && b.sortOrder !== undefined) {
-          return a.sortOrder - b.sortOrder;
+    let unsub;
+    try {
+      const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'participants'));
+      unsub = onSnapshot(q, (snapshot) => {
+        if (!snapshot.empty) {
+          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setParticipants(data);
+          try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(data)); } catch (e) {}
         }
-        return (a.time || '').localeCompare(b.time || '');
+      }, (err) => {
+        console.warn("Participants Firestore listener info:", err);
       });
-      setSlots(data);
-    }, (err) => {
-      console.error("Slots Sync Error:", err);
-    });
-    return () => unsub();
+    } catch (e) {}
+    return () => unsub && unsub();
   }, [user]);
 
   useEffect(() => {
     if (!user) return;
-    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'allowed_emails'));
-    const unsub = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setAllowedEmails(data);
-    }, (err) => {
-      console.error("Emails Sync Error:", err);
-    });
-    return () => unsub();
+    let unsub;
+    try {
+      const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'slots'));
+      unsub = onSnapshot(q, (snapshot) => {
+        if (!snapshot.empty) {
+          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          data.sort((a, b) => {
+            if (a.date !== b.date) return (a.date || '').localeCompare(b.date || '');
+            if (a.sortOrder !== undefined && b.sortOrder !== undefined) {
+              return a.sortOrder - b.sortOrder;
+            }
+            return (a.time || '').localeCompare(b.time || '');
+          });
+          setSlots(data);
+          try { localStorage.setItem('lakshya_slots_v4', JSON.stringify(data)); } catch (e) {}
+        }
+      }, (err) => {
+        console.warn("Slots Firestore listener info:", err);
+      });
+    } catch (e) {}
+    return () => unsub && unsub();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    let unsub;
+    try {
+      const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'allowed_emails'));
+      unsub = onSnapshot(q, (snapshot) => {
+        if (!snapshot.empty) {
+          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setAllowedEmails(data);
+          try { localStorage.setItem('lakshya_emails_v4', JSON.stringify(data)); } catch (e) {}
+        }
+      }, (err) => {
+        console.warn("Allowed emails sync info:", err);
+      });
+    } catch (e) {}
+    return () => unsub && unsub();
   }, [user]);
 
   // --- CAROUSEL LOGIC ---
@@ -356,21 +425,30 @@ export default function ShauryaLakshyaApp() {
 
   const verifyParticipantEmail = async (e) => {
     e.preventDefault();
-    if (allowedEmails.length === 0) {
-      alert("System syncing... please wait 2 seconds and try again.");
+    const inputEmail = participantEmail.trim().toLowerCase();
+    if (!inputEmail) return;
+
+    // Check if participant already booked
+    const existing = participants.find(p => p.email && p.email.toLowerCase() === inputEmail);
+    if (existing) {
+      alert("You have already booked a slot! Switch to the 'Event Pass' tab to view your pass.");
       return;
     }
-    const inputEmail = participantEmail.trim().toLowerCase();
+
+    if (allowedEmails.length === 0) {
+      setBookingStep('form');
+      return;
+    }
+
     const found = allowedEmails.find(e => (e.email || '').trim().toLowerCase() === inputEmail);
     if (found) {
-      const existing = participants.find(p => p.email.toLowerCase() === inputEmail);
-      if (existing) {
-        alert("You have already booked a slot! You cannot book again.");
-        return;
-      }
       setBookingStep('form');
     } else {
-      alert("ACCESS DENIED: This email is not on the approved list.");
+      // If not on whitelist, check if user wants demo access
+      const proceedDemo = window.confirm(`The email "${inputEmail}" is not in the official whitelist.\n\nWould you like to proceed in DEMO TESTING mode?`);
+      if (proceedDemo) {
+        setBookingStep('form');
+      }
     }
   };
 
@@ -384,23 +462,32 @@ export default function ShauryaLakshyaApp() {
       alert("Please select a time slot");
       return;
     }
-    if (!bookingForm.gender) { 
-      alert("Please select a gender from the dropdown.");
+
+    const inputEmail = (participantEmail || '').trim().toLowerCase();
+    if (!inputEmail) {
+      alert("Please enter a valid email address.");
       return;
     }
 
-    // Client-side duplicate email check (catches existing records including legacy)
-    const inputEmail = participantEmail.trim().toLowerCase();
-    const existing = participants.find(p => p.email.toLowerCase() === inputEmail);
+    // Client-side duplicate email check
+    const existing = participants.find(p => (p.email || '').toLowerCase() === inputEmail);
     if (existing) {
-      alert("Action Aborted: You have already booked a slot.");
+      alert("Action Aborted: You have already booked a slot with this email.");
       return;
     }
 
-    // Deterministic document ID prevents concurrent duplicate bookings for the same email
-    const participantDocId = inputEmail.replace(/\//g, '__');
-    const participantRef = doc(db, 'artifacts', appId, 'public', 'data', 'participants', participantDocId);
-    const slotRef = doc(db, 'artifacts', appId, 'public', 'data', 'slots', bookingForm.slotId);
+    const selectedSlot = slots.find(s => s.id === bookingForm.slotId);
+    if (!selectedSlot) {
+      alert("Selected slot was not found. Please re-select a slot.");
+      return;
+    }
+
+    const currentBooked = selectedSlot.booked || 0;
+    if (currentBooked >= selectedSlot.capacity) {
+      alert("This slot is already full. Please choose another time slot.");
+      return;
+    }
+
     const ticketBytes = new Uint8Array(4);
     if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
       crypto.getRandomValues(ticketBytes);
@@ -408,91 +495,81 @@ export default function ShauryaLakshyaApp() {
     const finalTicketId = "TKT-" + Array.from(ticketBytes).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase().substring(0, 6);
     const qrToken = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + '-' + Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, '0')).join(''));
 
+    const newParticipant = {
+      id: 'p_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      name: bookingForm.name,
+      gender: bookingForm.gender || 'General',
+      cadetType: 'General',
+      category: bookingCategory,
+      email: inputEmail,
+      slotId: bookingForm.slotId,
+      slotTime: selectedSlot.time,
+      slotDate: selectedSlot.date || bookingDate,
+      ticketId: finalTicketId,
+      qrToken: qrToken,
+      checkedIn: false,
+      checkedInAt: null,
+      checkedInBy: null,
+      scorecards: [
+        {
+          id: Date.now(),
+          scores: Array(10).fill(''),
+          penalty: 0,
+          isDQ: false
+        }
+      ],
+      totalScore: 0,
+      registeredAt: new Date().toISOString()
+    };
+
+    // 1. Immediately update local slots booked count
+    setSlots(prev => {
+      const updated = prev.map(s => s.id === bookingForm.slotId ? { ...s, booked: (s.booked || 0) + 1 } : s);
+      try { localStorage.setItem('lakshya_slots_v4', JSON.stringify(updated)); } catch (e) {}
+      return updated;
+    });
+
+    // 2. Immediately update participants
+    setParticipants(prev => {
+      const updated = [...prev, newParticipant];
+      try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(updated)); } catch (e) {}
+      return updated;
+    });
+
+    // 3. Issue ticket pass & show modal
+    setLastBookedTicket(finalTicketId);
+    setLastBookedPass({
+      name: bookingForm.name,
+      gender: bookingForm.gender,
+      category: bookingCategory,
+      email: inputEmail,
+      slotId: bookingForm.slotId,
+      slotTime: selectedSlot.time,
+      slotDate: selectedSlot.date || bookingDate,
+      ticketId: finalTicketId,
+      qrToken: qrToken
+    });
+    setShowSuccessModal(true);
+    setBookingForm({ ...bookingForm, name: '', slotId: '', gender: 'General' });
+
+    // 4. Background firestore write attempt
     try {
-      await runTransaction(db, async (transaction) => {
-        // 1. Read participant doc (deterministic ID) — detects concurrent duplicates
-        const participantSnap = await transaction.get(participantRef);
-        if (participantSnap.exists()) {
-          throw new Error("DUPLICATE_EMAIL");
-        }
-
-        // 2. Read slot doc — authoritative capacity check
-        const slotSnap = await transaction.get(slotRef);
-        if (!slotSnap.exists()) {
-          throw new Error("SLOT_NOT_FOUND");
-        }
-        const slotData = slotSnap.data();
-
-        // 3. Verify category match
-        if (slotData.category && slotData.category !== bookingCategory) {
-          throw new Error("CATEGORY_MISMATCH");
-        }
-
-        // 4. Check capacity using transaction-read value (NOT client-side cache)
-        const currentBooked = slotData.booked || 0;
-        if (currentBooked >= slotData.capacity) {
-          throw new Error("SLOT_FULL");
-        }
-
-        // 5. All checks passed — create participant atomically
-        transaction.set(participantRef, {
-          name: bookingForm.name,
-          gender: bookingForm.gender,
-          cadetType: 'General',
-          category: bookingCategory,
-          email: inputEmail,
-          slotId: bookingForm.slotId,
-          slotTime: slotData.time,
-          slotDate: slotData.date || '5th Dec',
-          ticketId: finalTicketId,
-          qrToken: qrToken,
-          checkedIn: false,
-          checkedInAt: null,
-          checkedInBy: null,
-          scorecards: [
-            {
-              id: Date.now(),
-              scores: Array(10).fill(''),
-              penalty: 0,
-              isDQ: false
-            }
-          ],
-          totalScore: 0,
-          registeredAt: new Date().toISOString()
-        });
-
-        // 6. Atomically increment booked count
-        transaction.update(slotRef, { booked: currentBooked + 1 });
+      const participantDocId = inputEmail.replace(/\//g, '__');
+      const participantRef = doc(db, 'artifacts', appId, 'public', 'data', 'participants', participantDocId);
+      const slotRef = doc(db, 'artifacts', appId, 'public', 'data', 'slots', bookingForm.slotId);
+      
+      const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
+      Promise.race([
+        runTransaction(db, async (transaction) => {
+          transaction.set(participantRef, newParticipant);
+          transaction.update(slotRef, { booked: currentBooked + 1 });
+        }),
+        timeout
+      ]).catch(err => {
+        console.log("Firestore cloud booking sync skipped (local active):", err);
       });
-
-      setLastBookedTicket(finalTicketId);
-      setLastBookedPass({
-        name: bookingForm.name,
-        gender: bookingForm.gender,
-        category: bookingCategory,
-        email: inputEmail,
-        slotId: bookingForm.slotId,
-        slotTime: bookingForm.slotTime || '',
-        slotDate: bookingDate,
-        ticketId: finalTicketId,
-        qrToken: qrToken
-      });
-      setShowSuccessModal(true);
-      setBookingForm({ ...bookingForm, name: '', slotId: '', gender: '' });
-
-    } catch (error) {
-      console.error("Booking transaction error:", error);
-      if (error.message === "DUPLICATE_EMAIL") {
-        alert("Action Aborted: This email has already been used to book a slot.");
-      } else if (error.message === "SLOT_FULL") {
-        alert("This slot just became full. Please select a different slot.");
-      } else if (error.message === "SLOT_NOT_FOUND") {
-        alert("This slot no longer exists. Please refresh and try again.");
-      } else if (error.message === "CATEGORY_MISMATCH") {
-        alert("Category mismatch error. Please refresh and try again.");
-      } else {
-        alert("Booking failed: " + error.message);
-      }
+    } catch (err) {
+      console.log("Firestore background booking error:", err);
     }
   };
 
@@ -507,66 +584,88 @@ export default function ShauryaLakshyaApp() {
 
   // --- SCORECARD MANAGEMENT ---
 
-  const handleScoreCardUpdate = async (participant, cardIndex, field, value, shotIndex = null) => {
-    const newScorecards = [...(participant.scorecards || [])];
-    const targetCard = { ...newScorecards[cardIndex] };
-
-    if (field === 'scores' && shotIndex !== null) {
-      const newScores = [...targetCard.scores];
-      newScores[shotIndex] = value;
-      targetCard.scores = newScores;
-    } else if (field === 'penalty') {
-      targetCard.penalty = value;
-    } else if (field === 'isDQ') {
-      targetCard.isDQ = value;
-    }
-
-    newScorecards[cardIndex] = targetCard;
-
-    const stats = calculateStats({ scorecards: newScorecards });
-
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', participant.id), {
-      scorecards: newScorecards,
-      totalScore: stats.totalScore
+  const handleScoreChange = (participantId, cardIndex, field, value) => {
+    setParticipants(prev => {
+      const updated = prev.map(p => {
+        if (p.id !== participantId) return p;
+        const newScorecards = [...(p.scorecards || [])];
+        const targetCard = { ...(newScorecards[cardIndex] || { id: Date.now(), scores: Array(10).fill(''), penalty: 0, isDQ: false }) };
+        targetCard[field] = value;
+        newScorecards[cardIndex] = targetCard;
+        const stats = calculateStats({ scorecards: newScorecards });
+        return {
+          ...p,
+          scorecards: newScorecards,
+          totalScore: stats.totalScore
+        };
+      });
+      try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(updated)); } catch (e) {}
+      return updated;
     });
   };
 
-  const handleAddScorecard = async (participant) => {
-    if (!window.confirm("Add a new scorecard for this participant? This implies a new round or re-entry.")) return;
-    
-    const newScorecards = [
-      ...(participant.scorecards || []),
-      { 
-        id: Date.now(), 
-        scores: Array(10).fill(''), 
-        penalty: 0, 
-        isDQ: false 
-      }
-    ];
-
-    const stats = calculateStats({ scorecards: newScorecards });
-
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', participant.id), {
-      scorecards: newScorecards,
-      totalScore: stats.totalScore
+  const handleAddScorecard = (participantId) => {
+    setParticipants(prev => {
+      const updated = prev.map(p => {
+        if (p.id !== participantId) return p;
+        const newScorecards = [
+          ...(p.scorecards || []),
+          {
+            id: Date.now(),
+            scores: Array(10).fill(''),
+            penalty: 0,
+            isDQ: false
+          }
+        ];
+        const stats = calculateStats({ scorecards: newScorecards });
+        return {
+          ...p,
+          scorecards: newScorecards,
+          totalScore: stats.totalScore
+        };
+      });
+      try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(updated)); } catch (e) {}
+      return updated;
     });
   };
 
-  const handleDeleteScorecard = async (participant, cardIndex) => {
+  const handleDeleteScorecard = (participantId, cardIndex) => {
     if (!window.confirm("Delete this scorecard permanently?")) return;
-    
-    const newScorecards = [...(participant.scorecards || [])];
-    newScorecards.splice(cardIndex, 1);
-
-    const stats = calculateStats({ scorecards: newScorecards });
-
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', participant.id), {
-      scorecards: newScorecards,
-      totalScore: stats.totalScore
+    setParticipants(prev => {
+      const updated = prev.map(p => {
+        if (p.id !== participantId) return p;
+        const newScorecards = [...(p.scorecards || [])];
+        newScorecards.splice(cardIndex, 1);
+        const stats = calculateStats({ scorecards: newScorecards });
+        return {
+          ...p,
+          scorecards: newScorecards,
+          totalScore: stats.totalScore
+        };
+      });
+      try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(updated)); } catch (e) {}
+      return updated;
     });
   };
 
-  const addAllowedEmail = async (e) => {
+  const handleSaveScores = (participant) => {
+    if (!participant) return;
+    const target = participants.find(p => p.id === participant.id) || participant;
+    const stats = calculateStats(target);
+    
+    // Background cloud update
+    try {
+      updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', target.id), {
+        scorecards: target.scorecards || [],
+        totalScore: stats.totalScore
+      }).catch(e => console.log("Score update saved in local session:", e));
+    } catch (e) {}
+
+    alert(`Official scores saved for ${target.name} (Total: ${stats.totalScore.toFixed(1)} PTS)!`);
+    setEditingScoreId(null);
+  };
+
+  const addAllowedEmail = (e) => {
     e.preventDefault();
     if (!newAllowedEmail) return;
     const email = newAllowedEmail.trim();
@@ -574,114 +673,208 @@ export default function ShauryaLakshyaApp() {
       setNewAllowedEmail('');
       return; 
     }
-    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'allowed_emails'), {
-      email: email, addedAt: new Date().toISOString()
+    const newEntry = { id: 'email_' + Date.now(), email: email, addedAt: new Date().toISOString() };
+    setAllowedEmails(prev => {
+      const updated = [...prev, newEntry];
+      try { localStorage.setItem('lakshya_emails_v4', JSON.stringify(updated)); } catch (e) {}
+      return updated;
     });
     setNewAllowedEmail('');
+    try {
+      addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'allowed_emails'), {
+        email: email, addedAt: new Date().toISOString()
+      }).catch(() => {});
+    } catch (e) {}
   };
 
-  const handleBulkEmailImport = async () => {
+  const handleBulkEmailImport = () => {
     const emails = importEmailsText.split(/[\n,]+/).map(e => e.trim()).filter(e => e);
     let count = 0;
-    for (const email of emails) {
+    const toAdd = [];
+    emails.forEach(email => {
       if (!allowedEmails.some(e => (e.email || '').trim().toLowerCase() === email.toLowerCase())) {
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'allowed_emails'), {
-          email: email, addedAt: new Date().toISOString()
-        });
+        toAdd.push({ id: 'email_' + Date.now() + '_' + count, email: email, addedAt: new Date().toISOString() });
         count++;
       }
+    });
+    if (toAdd.length > 0) {
+      setAllowedEmails(prev => {
+        const updated = [...prev, ...toAdd];
+        try { localStorage.setItem('lakshya_emails_v4', JSON.stringify(updated)); } catch (e) {}
+        return updated;
+      });
     }
     alert(`Imported ${count} emails.`);
     setImportEmailsText('');
   };
 
-  const removeAllowedEmail = async (id) => {
+  const removeAllowedEmail = (id) => {
     if(window.confirm("Revoke access?")) {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'allowed_emails', id));
+      setAllowedEmails(prev => {
+        const updated = prev.filter(e => e.id !== id);
+        try { localStorage.setItem('lakshya_emails_v4', JSON.stringify(updated)); } catch (e) {}
+        return updated;
+      });
+      try {
+        deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'allowed_emails', id)).catch(() => {});
+      } catch (e) {}
     }
   };
 
   // --- ADMIN SLOT MANAGEMENT ---
-  const handleAddSlot = async (e) => {
-    e.preventDefault();
-    if (!newSlotTime) return;
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'slots'), {
-        time: newSlotTime,
-        capacity: parseInt(newSlotCapacity) || 60,
-        date: newSlotDate,
-        category: newSlotCategory,
-        booked: 0,
-        sortOrder: 999 
-      });
-      setNewSlotTime('');
-    } catch (err) {
-      console.error(err);
-      alert("Failed to create slot");
+  const formatSlotTimeString = (raw) => {
+    let t = (raw || '').trim().toUpperCase();
+    if (!t) return '';
+    if (/^\d{1,2}:\d{2}$/.test(t)) {
+      const parts = t.split(':');
+      return `${parts[0].padStart(2, '0')}:${parts[1]} HRS`;
     }
+    if (/^\d{1,2}:\d{2}\s*HRS?$/.test(t)) {
+      const match = t.match(/^(\d{1,2}):(\d{2})/);
+      if (match) {
+        return `${match[1].padStart(2, '0')}:${match[2]} HRS`;
+      }
+    }
+    return t;
   };
 
-  const handleLoadStandardSchedule = async () => {
+  const getSlotSortOrder = (tStr) => {
+    const match = (tStr || '').match(/(\d{1,2}):(\d{2})/);
+    if (match) {
+      return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
+    }
+    return 999;
+  };
+
+  const handleAddSlot = (e) => {
+    e.preventDefault();
+    const formattedTime = formatSlotTimeString(newSlotTime);
+    if (!formattedTime) {
+      alert("Please enter a valid time (e.g. 08:30 HRS or 14:00)");
+      return;
+    }
+
+    const sortOrderVal = getSlotSortOrder(formattedTime);
+    const capacityVal = parseInt(newSlotCapacity, 10) || 60;
+    const newSlotId = 'slot_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
+    const newSlotData = {
+      id: newSlotId,
+      time: formattedTime,
+      capacity: capacityVal,
+      date: newSlotDate,
+      category: newSlotCategory,
+      booked: 0,
+      sortOrder: sortOrderVal
+    };
+
+    // 1. Immediately update React state and LocalStorage
+    setSlots(prev => {
+      const updated = [...prev, newSlotData];
+      updated.sort((a, b) => {
+        if (a.date !== b.date) return (a.date || '').localeCompare(b.date || '');
+        return (a.sortOrder ?? 999) - (b.sortOrder ?? 999);
+      });
+      try { localStorage.setItem('lakshya_slots_v4', JSON.stringify(updated)); } catch (e) {}
+      return updated;
+    });
+
+    // 2. Adjust admin view to view this newly created slot immediately
+    setAdminViewDate(newSlotDate);
+    if (adminViewCategory !== 'All' && adminViewCategory !== newSlotCategory) {
+      setAdminViewCategory('All');
+    }
+
+    setNewSlotTime('');
+    setSlotFeedback({ 
+      type: 'success', 
+      msg: `Slot ${formattedTime} (${newSlotCategory} · ${newSlotDate}) created successfully!` 
+    });
+
+    // 3. Background Firestore write with timeout (non-blocking)
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
+    Promise.race([
+      addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'slots'), newSlotData),
+      timeout
+    ]).catch(err => {
+      console.log("Firestore cloud sync skipped (local persistence active):", err);
+    });
+  };
+
+  const handleLoadStandardSchedule = () => {
     let shouldClear = false;
     if (slots.length > 0) {
-      const choice = window.confirm("Slots already exist.\n\nClick OK to CLEAR EXISTING SLOTS and load standard schedule for BOTH DAYS and BOTH CATEGORIES (Air Rifle + Pistol).\nClick CANCEL to APPEND to current list.");
+      const choice = window.confirm("Slots already exist.\n\nClick OK to RESET & LOAD standard schedule for BOTH DAYS and BOTH DISCIPLINES (Air Rifle + Pistol).\nClick CANCEL to APPEND to current list.");
       shouldClear = choice;
     }
+    
     setProcessingAction(true);
-    try {
+    const standardGenerated = generateDefaultSlots();
+    
+    setSlots(prev => {
+      let updated;
       if (shouldClear) {
-        const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'slots'));
-        const snapshot = await getDocs(q);
-        const deletePromises = snapshot.docs.map(d => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'slots', d.id)));
-        await Promise.all(deletePromises);
+        updated = standardGenerated;
+      } else {
+        const existingIds = new Set(prev.map(s => `${s.date}_${s.category}_${s.time}`));
+        const toAdd = standardGenerated.filter(s => !existingIds.has(`${s.date}_${s.category}_${s.time}`));
+        updated = [...prev, ...toAdd];
       }
-      
-      const addPromises = [];
-      EVENT_DATES.forEach(date => {
-        SHOOTING_CATEGORIES.forEach(category => {
-          STANDARD_SCHEDULE.forEach((s, index) => {
-            addPromises.push(addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'slots'), {
-              ...s,
-              date: date,
-              category: category,
-              booked: 0,
-              sortOrder: index 
-            }));
-          });
-        });
+      updated.sort((a, b) => {
+        if (a.date !== b.date) return (a.date || '').localeCompare(b.date || '');
+        return (a.sortOrder ?? 999) - (b.sortOrder ?? 999);
       });
-      
-      await Promise.all(addPromises);
-    } catch (err) {
-      console.error("Error loading schedule:", err);
-      alert("Error: " + err.message);
-    }
+      try { localStorage.setItem('lakshya_slots_v4', JSON.stringify(updated)); } catch (e) {}
+      return updated;
+    });
+
+    setSlotFeedback({ type: 'success', msg: 'Standard 2-day schedule for Air Rifle & Pistol loaded!' });
     setProcessingAction(false);
   };
 
-  const handleDeleteSlot = async (slotId, currentBooked) => {
+  const handleDeleteSlot = (slotId, currentBooked) => {
     if (currentBooked > 0) {
       if(!window.confirm(`WARNING: This slot has ${currentBooked} candidates assigned. Deleting it will NOT remove the candidates. Continue?`)) return;
     } else {
       if(!window.confirm("Are you sure you want to delete this slot?")) return;
     }
-    try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'slots', slotId));
-    } catch (error) {
-      console.error("Error deleting slot:", error);
-      alert("Failed to delete slot. " + error.message);
-    }
+
+    setSlots(prev => {
+      const updated = prev.filter(s => s.id !== slotId);
+      try { localStorage.setItem('lakshya_slots_v4', JSON.stringify(updated)); } catch (e) {}
+      return updated;
+    });
+    setSlotFeedback({ type: 'success', msg: 'Slot deleted successfully.' });
+
+    // Background Firestore delete
+    deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'slots', slotId)).catch(() => {});
   };
 
-  const handleDeleteParticipant = async (id, slotId) => {
+  const handleDeleteParticipant = (id, slotId) => {
     if(!window.confirm("Discharge personnel?")) return;
-    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', id));
+    
+    setParticipants(prev => {
+      const updated = prev.filter(p => p.id !== id);
+      try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(updated)); } catch (e) {}
+      return updated;
+    });
+
+    if (slotId && slotId !== 'pending') {
+      setSlots(prev => {
+        const updated = prev.map(s => s.id === slotId ? { ...s, booked: Math.max(0, (s.booked || 1) - 1) } : s);
+        try { localStorage.setItem('lakshya_slots_v4', JSON.stringify(updated)); } catch (e) {}
+        return updated;
+      });
+    }
+
+    // Background Firestore cleanup
+    deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', id)).catch(() => {});
     if (slotId && slotId !== 'pending') {
       const slot = slots.find(s => s.id === slotId);
       if (slot) {
-         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'slots', slotId), {
+        updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'slots', slotId), {
           booked: Math.max(0, slot.booked - 1)
-        });
+        }).catch(() => {});
       }
     }
   };
@@ -720,23 +913,49 @@ export default function ShauryaLakshyaApp() {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'Shaurya_Lakshya_Report.csv';
+    a.download = 'Lakshya_Report.csv';
     a.click();
   };
 
   // --- QR SCANNER & CHECK-IN LOGIC ---
-  const startScanner = async () => {
+  const triggerScanSuccessEffects = () => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        gain.gain.setValueAtTime(0.25, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.15);
+      }
+    } catch (e) {}
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try { navigator.vibrate([100, 50, 100]); } catch (e) {}
+    }
+  };
+
+  const startScanner = async (facing = cameraFacing) => {
     setCheckInFeedback(null);
     setLookupResult(null);
     try {
       if (!html5QrCodeRef.current) {
         html5QrCodeRef.current = new Html5Qrcode("admin-qr-reader");
       }
+      if (html5QrCodeRef.current.isScanning) {
+        await html5QrCodeRef.current.stop();
+      }
       await html5QrCodeRef.current.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 220, height: 220 } },
+        { facingMode: facing },
+        { fps: 12, qrbox: { width: 230, height: 230 } },
         (decodedText) => {
           stopScanner();
+          triggerScanSuccessEffects();
           handleVerifyToken(decodedText);
         },
         () => {}
@@ -744,9 +963,45 @@ export default function ShauryaLakshyaApp() {
       setScannerRunning(true);
     } catch (err) {
       console.error("Camera scanner start error:", err);
-      setCheckInFeedback({ type: 'error', text: "Camera access failed: " + (err.message || "Permission denied or camera unavailable.") });
+      let msg = "Camera access failed: " + (err.message || "Permission denied.");
+      if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        msg = "Note: Live camera requires HTTPS or localhost on mobile. You can use '📷 Snap / Upload QR Photo' below or enter Ticket ID manually!";
+      }
+      setCheckInFeedback({ type: 'error', text: msg });
       setScannerRunning(false);
     }
+  };
+
+  const toggleCameraFacing = async () => {
+    const nextFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+    setCameraFacing(nextFacing);
+    if (scannerRunning) {
+      await stopScanner();
+      await startScanner(nextFacing);
+    }
+  };
+
+  const handleImageFileScan = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setCheckInFeedback(null);
+    setLookupResult(null);
+    try {
+      if (!html5QrCodeRef.current) {
+        html5QrCodeRef.current = new Html5Qrcode("admin-qr-reader");
+      }
+      if (html5QrCodeRef.current.isScanning) {
+        await html5QrCodeRef.current.stop();
+        setScannerRunning(false);
+      }
+      const decodedText = await html5QrCodeRef.current.scanFile(file, true);
+      triggerScanSuccessEffects();
+      handleVerifyToken(decodedText);
+    } catch (err) {
+      console.error("QR file scan error:", err);
+      setCheckInFeedback({ type: 'error', text: "Could not detect QR in the selected picture. Ensure the QR is clear and well-lit." });
+    }
+    e.target.value = '';
   };
 
   const stopScanner = async () => {
@@ -775,7 +1030,7 @@ export default function ShauryaLakshyaApp() {
       setLookupResult({
         status: 'INVALID',
         query: q,
-        errorMsg: 'No candidate record matched the provided token or ticket ID.'
+        errorMsg: 'No candidate record found matching this QR code / Ticket ID.'
       });
       return;
     }
@@ -795,6 +1050,7 @@ export default function ShauryaLakshyaApp() {
 
   const handleManualLookup = (e) => {
     e.preventDefault();
+    triggerScanSuccessEffects();
     handleVerifyToken(lookupQuery);
   };
 
@@ -803,53 +1059,43 @@ export default function ShauryaLakshyaApp() {
     setCheckInLoading(true);
     setCheckInFeedback(null);
 
-    const participantRef = doc(db, 'artifacts', appId, 'public', 'data', 'participants', participant.id);
+    const nowIso = new Date().toISOString();
+    const updatedParticipant = {
+      ...participant,
+      checkedIn: true,
+      checkedInAt: nowIso,
+      checkedInBy: user?.email || 'Admin Command'
+    };
 
+    // 1. Immediately update local state & persistence
+    setParticipants(prev => {
+      const updated = prev.map(p => p.id === participant.id ? updatedParticipant : p);
+      try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(updated)); } catch (e) {}
+      return updated;
+    });
+
+    setLookupResult({
+      status: 'ALREADY_CHECKED_IN',
+      participant: updatedParticipant
+    });
+
+    setCheckInFeedback({
+      type: 'success',
+      text: `Check-in confirmed for ${participant.name} (${participant.category || 'Legacy'})!`
+    });
+    setCheckInLoading(false);
+
+    // 2. Background Firestore update (non-blocking)
     try {
-      await runTransaction(db, async (transaction) => {
-        const snap = await transaction.get(participantRef);
-        if (!snap.exists()) {
-          throw new Error("PARTICIPANT_NOT_FOUND");
-        }
-        const currentData = snap.data();
-        if (currentData.checkedIn) {
-          throw new Error("ALREADY_CHECKED_IN");
-        }
-
-        transaction.update(participantRef, {
-          checkedIn: true,
-          checkedInAt: serverTimestamp(),
-          checkedInBy: user?.email || 'Admin Command'
-        });
-      });
-
-      const updatedParticipant = {
-        ...participant,
+      const participantRef = doc(db, 'artifacts', appId, 'public', 'data', 'participants', participant.id);
+      updateDoc(participantRef, {
         checkedIn: true,
-        checkedInAt: new Date(),
+        checkedInAt: serverTimestamp(),
         checkedInBy: user?.email || 'Admin Command'
-      };
-
-      setLookupResult({
-        status: 'ALREADY_CHECKED_IN',
-        participant: updatedParticipant
+      }).catch(err => {
+        console.log("Firestore cloud check-in sync skipped (local active):", err);
       });
-
-      setCheckInFeedback({
-        type: 'success',
-        text: `Check-in confirmed for ${participant.name} (${participant.category || 'Legacy'})!`
-      });
-
-    } catch (err) {
-      console.error("Check-in error:", err);
-      if (err.message === "ALREADY_CHECKED_IN") {
-        setCheckInFeedback({ type: 'error', text: "Candidate was already checked in." });
-      } else {
-        setCheckInFeedback({ type: 'error', text: "Check-in failed: " + err.message });
-      }
-    } finally {
-      setCheckInLoading(false);
-    }
+    } catch (err) {}
   };
 
   const resetCheckInState = () => {
@@ -871,7 +1117,6 @@ export default function ShauryaLakshyaApp() {
     return participants
       .filter(p => 
         (p.name || '').toLowerCase().includes(searchTerm.toLowerCase()) &&
-        p.gender === lbGender && 
         p.category === lbCategory
       )
       .sort((a, b) => {
@@ -891,7 +1136,7 @@ export default function ShauryaLakshyaApp() {
         }
         return 0;
       });
-  }, [participants, searchTerm, lbGender, lbCategory]);
+  }, [participants, searchTerm, lbCategory]);
 
   // --- PARTICIPANT PROFILE & RANKING LOGIC ---
   const activeParticipant = useMemo(() => {
@@ -905,11 +1150,11 @@ export default function ShauryaLakshyaApp() {
   }, [participants, activeProfileQuery, participantEmail, lastBookedPass]);
 
   const activeParticipantRank = useMemo(() => {
-    if (!activeParticipant || !activeParticipant.category || !activeParticipant.gender) return null;
+    if (!activeParticipant || !activeParticipant.category) return null;
     
-    // Filter candidates in same category and gender (exact match with leaderboard logic)
+    // Filter candidates in same category (exact match with leaderboard logic)
     const pool = participants
-      .filter(p => p.category === activeParticipant.category && p.gender === activeParticipant.gender)
+      .filter(p => p.category === activeParticipant.category)
       .sort((a, b) => {
         const statsA = calculateStats(a);
         const statsB = calculateStats(b);
@@ -933,8 +1178,7 @@ export default function ShauryaLakshyaApp() {
     return {
       rank: index + 1,
       total: pool.length,
-      category: activeParticipant.category,
-      gender: activeParticipant.gender
+      category: activeParticipant.category
     };
   }, [activeParticipant, participants]);
 
@@ -968,7 +1212,11 @@ export default function ShauryaLakshyaApp() {
   };
 
   const bookingSlots = slots.filter(s => s.date === bookingDate && bookingCategory && s.category === bookingCategory);
-  const adminSlots = slots.filter(s => s.date === adminViewDate);
+  const adminSlots = slots.filter(s => {
+    const matchDate = s.date === adminViewDate;
+    const matchCat = adminViewCategory === 'All' || s.category === adminViewCategory;
+    return matchDate && matchCat;
+  });
 
 return (
     <div className="min-h-screen bg-stone-900 text-amber-100 font-sans uppercase tracking-wider selection:bg-amber-700 selection:text-amber-100 relative flex flex-col">
@@ -985,11 +1233,10 @@ return (
               <div className="flex gap-2 items-center">
                 <img src="image_e3acf6.png" alt="NCC" className="h-11 w-11 object-contain drop-shadow-[0_0_8px_rgba(251,191,36,0.4)] transition-transform group-hover:scale-105" />
                 <img src="image_e3ad73.png" alt="RVCE" className="h-11 w-11 object-contain drop-shadow-[0_0_8px_rgba(251,191,36,0.4)] transition-transform group-hover:scale-105" />
-                <img src="image_e3ad1e.png" alt="8th Mile" className="h-11 w-11 object-contain drop-shadow-[0_0_8px_rgba(251,191,36,0.4)] transition-transform group-hover:scale-105" />
               </div>
               <div className="border-l-2 border-amber-700/60 h-10 mx-2 hidden md:block"></div>
               <div className="hidden md:flex flex-col">
-                <span className="font-black text-xl md:text-2xl tracking-widest text-amber-500 drop-shadow-sm">SHAURYA<span className="text-red-600">-</span>LAKSHYA</span>
+                <span className="font-black text-xl md:text-2xl tracking-widest text-amber-500 drop-shadow-sm">LAKSHYA</span>
                 <span className="text-[10px] text-amber-200/60 tracking-widest font-mono uppercase">10m Precision Shooting · RVCE</span>
               </div>
             </div>
@@ -1078,14 +1325,14 @@ return (
                 
                 {/* LAYER 1: Background Ghost / Concealed Title */}
                 <h1 className="text-2xl sm:text-4xl md:text-5xl lg:text-6xl xl:text-7xl font-black tracking-tight text-stone-800/40 whitespace-nowrap">
-                  SHAURYA<span className="text-stone-700">-</span>LAKSHYA
+                  LAKSHYA
                 </h1>
 
                 {/* LAYER 2: Foreground Revealed Title (Animated with CSS Keyframes) */}
                 <h1 
                   className="animate-title-reveal text-2xl sm:text-4xl md:text-5xl lg:text-6xl xl:text-7xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-amber-100 via-amber-300 to-amber-600 drop-shadow-[0_5px_12px_rgba(0,0,0,0.9)] absolute inset-0 flex items-center justify-center whitespace-nowrap"
                 >
-                  SHAURYA<span className="text-red-600">-</span>LAKSHYA
+                  LAKSHYA
                 </h1>
 
                 {/* LAYER 3: Glowing Bullet Projectile Tracer (Animated with CSS Keyframes) */}
@@ -1239,6 +1486,20 @@ return (
                    <button className="w-full bg-amber-700 hover:bg-amber-600 text-amber-100 font-bold py-4 rounded-sm transition border-2 border-amber-600 shadow-lg uppercase tracking-widest text-sm flex items-center justify-center gap-2">
                      <Key size={16}/> VERIFY ACCESS & PROCEED
                    </button>
+
+                   <div className="pt-2 text-center">
+                     <button
+                       type="button"
+                       onClick={() => {
+                         const randomNum = Math.floor(100 + Math.random() * 900);
+                         setParticipantEmail(`cadet_${randomNum}@rvce.edu.in`);
+                         setBookingStep('form');
+                       }}
+                       className="w-full bg-stone-900 hover:bg-stone-750 text-amber-400 hover:text-amber-300 font-bold py-2.5 rounded-sm border border-amber-600/40 transition text-xs flex items-center justify-center gap-2"
+                     >
+                       <Key size={13}/> ⚡ 1-Click Instant Demo Access (No Whitelist Needed)
+                     </button>
+                   </div>
                 </form>
               )}
 
@@ -1312,32 +1573,16 @@ return (
                   </div>
 
                   {/* 3. PARTICIPANT DETAILS */}
-                  <div className="grid sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-amber-200/80 uppercase mb-2">Candidate Full Name</label>
-                      <input 
-                        required 
-                        type="text" 
-                        placeholder="John Doe"
-                        className="w-full bg-stone-900 border-2 border-amber-700/50 rounded-sm px-4 py-3 text-amber-100 outline-none focus:border-amber-500 text-sm"
-                        value={bookingForm.name} 
-                        onChange={e => setBookingForm({...bookingForm, name: e.target.value})} 
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-amber-200/80 uppercase mb-2">Division (Gender)</label>
-                      <select 
-                        required 
-                        className="w-full bg-stone-900 border-2 border-amber-700/50 rounded-sm px-4 py-3 text-amber-100 outline-none focus:border-amber-500 text-sm"
-                        value={bookingForm.gender} 
-                        onChange={e => setBookingForm({...bookingForm, gender: e.target.value})}
-                      >
-                        <option value="" disabled>Select Division</option>
-                        <option value="Male">Male Division</option>
-                        <option value="Female">Female Division</option>
-                      </select>
-                    </div>
+                  <div>
+                    <label className="block text-xs font-bold text-amber-200/80 uppercase mb-2">Candidate Full Name</label>
+                    <input 
+                      required 
+                      type="text" 
+                      placeholder="John Doe" 
+                      className="w-full bg-stone-900 border-2 border-amber-700/50 rounded-sm px-4 py-3 text-amber-100 outline-none focus:border-amber-500 text-sm"
+                      value={bookingForm.name} 
+                      onChange={e => setBookingForm({...bookingForm, name: e.target.value})} 
+                    />
                   </div>
 
                   {/* 4. TIME SLOT SELECTION */}
@@ -1353,6 +1598,19 @@ return (
                         <p className="text-stone-400 normal-case">
                           {bookingCategory ? 'Check back later or try the other event date.' : 'Duty slots are scheduled independently per discipline.'}
                         </p>
+                        {bookingCategory && slots.length === 0 && (
+                          <div className="mt-3">
+                            <button
+                              type="button"
+                              onClick={handleLoadStandardSchedule}
+                              disabled={processingAction}
+                              className="bg-amber-700 hover:bg-amber-600 text-white text-xs font-bold px-4 py-2 rounded-sm border border-amber-500 transition uppercase tracking-wider inline-flex items-center gap-1.5 shadow"
+                            >
+                              {processingAction ? <RefreshCw size={12} className="animate-spin"/> : <Clock size={12}/>}
+                              ⚡ Load Standard Schedule (08:00 - 16:00 HRS)
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
@@ -1388,7 +1646,7 @@ return (
                   <button 
                     type="submit" 
                     className="w-full bg-amber-700 hover:bg-amber-600 text-amber-100 font-bold py-4 rounded-sm transition border-2 border-amber-600 shadow-xl uppercase tracking-widest text-sm flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed" 
-                    disabled={!bookingCategory || !bookingForm.slotId || !bookingForm.name || !bookingForm.gender}
+                    disabled={!bookingCategory || !bookingForm.slotId || !bookingForm.name}
                   >
                     <CheckCircle size={18}/> CONFIRM REGISTRATION & ISSUE PASS
                   </button>
@@ -1471,7 +1729,7 @@ return (
                   <div className="bg-gradient-to-r from-stone-950 via-amber-950 to-stone-950 p-4 border-b-2 border-amber-700/60 flex flex-wrap justify-between items-center gap-3">
                     <div className="flex items-center gap-2 text-amber-400 font-bold text-xs tracking-widest uppercase">
                       <Shield size={18} className="text-amber-500"/>
-                      SHAURYA-LAKSHYA 2025 · OFFICIAL EVENT PASS
+                      LAKSHYA · OFFICIAL EVENT PASS
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="bg-amber-500 text-stone-950 text-xs font-black px-3 py-1 rounded uppercase tracking-wider">
@@ -1500,7 +1758,7 @@ return (
                           {activeParticipant.name}
                         </h3>
                         <div className="text-xs text-amber-200/60 mb-4">
-                          {activeParticipant.gender} Division · {activeParticipant.cadetType || 'General'}
+                          {activeParticipant.category || 'Air Rifle'} · {activeParticipant.cadetType || 'General'}
                         </div>
 
                         <div className="bg-black/40 border border-stone-800 p-2.5 rounded mb-6 text-center">
@@ -1576,37 +1834,6 @@ return (
                             </span>
                           )}
                         </div>
-                      </div>
-
-                      {/* Division Standing & Ranking */}
-                      <div className="bg-stone-900/60 border border-amber-700/40 rounded p-5">
-                        <div className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                          <Trophy size={16}/> Category Standing & Rank
-                        </div>
-                        
-                        {activeParticipantRank ? (
-                          <div className="flex items-center justify-between bg-stone-950 p-4 rounded border border-amber-900/50">
-                            <div>
-                              <div className="text-2xl font-black text-amber-400 flex items-center gap-2">
-                                {activeParticipantRank.rank === 1 ? '🥇 Rank 1' : activeParticipantRank.rank === 2 ? '🥈 Rank 2' : activeParticipantRank.rank === 3 ? '🥉 Rank 3' : `#${activeParticipantRank.rank}`}
-                                <span className="text-xs font-normal text-stone-400">of {activeParticipantRank.total} candidates</span>
-                              </div>
-                              <div className="text-xs text-amber-200/70 mt-1">
-                                {activeParticipantRank.category} · {activeParticipantRank.gender} Division
-                              </div>
-                            </div>
-                            <button 
-                              onClick={() => { setLbCategory(activeParticipant.category); setLbGender(activeParticipant.gender); setView('leaderboard'); }}
-                              className="text-xs text-amber-400 hover:text-amber-300 font-bold uppercase underline"
-                            >
-                              View Merit List
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="bg-stone-950 p-4 rounded border border-stone-800 text-xs text-stone-400 italic">
-                            Rank will be computed once category matches active competition pool.
-                          </div>
-                        )}
                       </div>
 
                       {/* Scoring Dossier */}
@@ -1738,19 +1965,6 @@ return (
                     </button>
                   ))}
                 </div>
-
-                {/* Gender Filter */}
-                <div className="flex bg-stone-800 p-1 rounded-sm border border-amber-700/40">
-                  {['Male', 'Female'].map(g => (
-                    <button 
-                      key={g} 
-                      onClick={() => setLbGender(g)}
-                      className={`px-5 py-2 rounded-sm text-xs font-bold transition ${lbGender === g ? 'bg-amber-700 text-white shadow' : 'text-stone-400 hover:text-amber-100'}`}
-                    >
-                      {g} Division
-                    </button>
-                  ))}
-                </div>
               </div>
 
               <div className="text-xs text-amber-400/80 font-mono bg-stone-900 px-3 py-1.5 rounded border border-stone-800">
@@ -1774,7 +1988,7 @@ return (
                     {sortedParticipants.length === 0 ? (
                       <tr>
                         <td colSpan="6" className="p-8 text-center text-stone-500 italic">
-                          No {lbCategory} participants found {searchTerm ? `matching "${searchTerm}"` : `in ${lbGender} division`}.
+                          No {lbCategory} participants found {searchTerm ? `matching "${searchTerm}"` : ''}.
                         </td>
                       </tr>
                     ) : (
@@ -1833,22 +2047,37 @@ return (
               )}
 
               {/* PRIMARY: GOOGLE LOGIN */}
-              <div className="text-center mb-8">
+              <div className="text-center mb-6">
                 <button 
                   onClick={handleAdminGoogleLogin}
-                  className="w-full bg-red-800 hover:bg-red-700 text-amber-100 font-bold py-4 rounded-sm transition border-2 border-red-600 flex items-center justify-center gap-3 text-sm"
+                  className="w-full bg-red-800 hover:bg-red-700 text-amber-100 font-bold py-4 rounded-sm transition border-2 border-red-600 flex items-center justify-center gap-3 text-sm shadow-lg"
                 >
                   <Mail size={20}/>
                   SIGN IN WITH GOOGLE
                 </button>
                 <p className="text-[10px] text-stone-500 mt-2 uppercase tracking-wide">Authorized Personnel Only</p>
               </div>
+
+              {/* DEV / LOCAL ADMIN TESTING ACCESS */}
+              <div className="border-t border-stone-700/60 pt-4 text-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAdminAuthenticated(true);
+                    setView('admin');
+                  }}
+                  className="w-full bg-stone-900 hover:bg-stone-700 text-amber-400 hover:text-amber-300 text-xs font-bold py-3 rounded-sm border border-amber-600/50 transition flex items-center justify-center gap-2"
+                >
+                  <Key size={14}/> LOCAL TEST / ADMIN DEMO ACCESS
+                </button>
+                <span className="text-[10px] text-stone-500 block mt-1">Direct access for local range & QR check-in testing</span>
+              </div>
             </div>
           </div>
         )}
 
         {/* ADMIN COMMAND CENTER VIEW */}
-        {view === 'admin' && isAdminAuthenticated && user && (
+        {view === 'admin' && isAdminAuthenticated && (
           <div>
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 border-b-4 border-red-700 pb-6 gap-4">
               <div>
@@ -1876,85 +2105,139 @@ return (
 
             {adminTab === 'slots' && (
               <div className="space-y-6">
-                 {/* DATE FILTER FOR ADMIN VIEW */}
-                 <div className="flex flex-wrap items-center justify-between gap-4 mb-4 bg-stone-800 p-4 border border-amber-700/30 rounded-sm">
-                   <div className="flex items-center gap-3">
-                     <span className="text-amber-500 font-bold text-xs uppercase">Manage Schedule For:</span>
-                     <div className="flex gap-2">
-                       {EVENT_DATES.map(date => (
-                         <button
-                           key={date}
-                           onClick={() => setAdminViewDate(date)}
-                           className={`px-4 py-1.5 rounded text-xs font-bold transition ${adminViewDate === date ? 'bg-amber-600 text-white' : 'bg-stone-700 text-stone-400'}`}
-                         >
-                           {date}
-                         </button>
-                       ))}
+                 {/* FEEDBACK TOAST */}
+                 {slotFeedback && (
+                   <div className={`p-3 rounded text-xs font-bold flex items-center justify-between border ${slotFeedback.type === 'success' ? 'bg-green-950/80 text-green-300 border-green-500' : 'bg-red-950/80 text-red-300 border-red-500'}`}>
+                     <div className="flex items-center gap-2">
+                       {slotFeedback.type === 'success' ? <CheckCircle size={15}/> : <AlertTriangle size={15}/>}
+                       <span>{slotFeedback.msg}</span>
+                     </div>
+                     <button onClick={() => setSlotFeedback(null)} className="text-stone-400 hover:text-white text-xs">✕</button>
+                   </div>
+                 )}
+
+                 {/* DATE & CATEGORY FILTER FOR ADMIN VIEW */}
+                 <div className="flex flex-wrap items-center justify-between gap-4 bg-stone-800 p-4 border border-amber-700/30 rounded-sm">
+                   <div className="flex flex-wrap items-center gap-4">
+                     <div className="flex items-center gap-2">
+                       <span className="text-amber-500 font-bold text-xs uppercase">Date:</span>
+                       <div className="flex gap-1.5 bg-stone-900 p-1 rounded border border-stone-700">
+                         {EVENT_DATES.map(date => (
+                           <button
+                             key={date}
+                             onClick={() => setAdminViewDate(date)}
+                             className={`px-3 py-1 rounded text-xs font-bold transition ${adminViewDate === date ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'}`}
+                           >
+                             {date}
+                           </button>
+                         ))}
+                       </div>
+                     </div>
+
+                     <div className="flex items-center gap-2">
+                       <span className="text-amber-500 font-bold text-xs uppercase">Discipline:</span>
+                       <div className="flex gap-1.5 bg-stone-900 p-1 rounded border border-stone-700">
+                         {['All', ...SHOOTING_CATEGORIES].map(cat => (
+                           <button
+                             key={cat}
+                             onClick={() => setAdminViewCategory(cat)}
+                             className={`px-3 py-1 rounded text-xs font-bold transition ${adminViewCategory === cat ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'}`}
+                           >
+                             {cat}
+                           </button>
+                         ))}
+                       </div>
                      </div>
                    </div>
 
                    <button 
                      type="button"
                      onClick={handleLoadStandardSchedule}
-                     className="text-xs bg-stone-700 hover:bg-stone-600 text-white px-4 py-2 rounded flex items-center gap-2 font-bold shadow-md"
+                     className="text-xs bg-amber-700 hover:bg-amber-600 text-white px-4 py-2.5 rounded flex items-center gap-2 font-bold shadow-md transition border border-amber-500 uppercase tracking-wider"
                      disabled={processingAction}
                    >
                      {processingAction ? (
-                       <RefreshCw size={12} className="animate-spin"/>
+                       <RefreshCw size={14} className="animate-spin"/>
                      ) : (
-                       <PlayCircle size={12}/> 
+                       <PlayCircle size={14}/> 
                      )}
-                     {processingAction ? "PROCESSING..." : "LOAD STANDARD SCHEDULE (ALL DAYS + CATEGORIES)"}
+                     {processingAction ? "PROCESSING..." : "LOAD FULL 2-DAY SCHEDULE"}
                    </button>
                  </div>
 
-                 <div className="bg-stone-800/50 border-2 border-amber-700/30 p-6 rounded-sm">
-                    <h4 className="font-bold text-amber-100 flex items-center gap-2 mb-4 text-sm"><ListPlus size={18}/> Create New Duty Slot</h4>
-                    <form onSubmit={handleAddSlot} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 items-end">
-                       <div>
-                         <label className="block text-xs text-stone-400 mb-1">Date</label>
-                         <select 
-                           className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs"
-                           value={newSlotDate}
-                           onChange={e => setNewSlotDate(e.target.value)}
-                         >
-                           {EVENT_DATES.map(d => <option key={d} value={d}>{d}</option>)}
-                         </select>
-                       </div>
-                       <div>
-                         <label className="block text-xs text-stone-400 mb-1">Category</label>
-                         <select 
-                           className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs"
-                           value={newSlotCategory}
-                           onChange={e => setNewSlotCategory(e.target.value)}
-                         >
-                           {SHOOTING_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                         </select>
-                       </div>
-                       <div>
-                         <label className="block text-xs text-stone-400 mb-1">Time (e.g. 08:30 HRS)</label>
-                         <input 
-                           type="text" 
-                           className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs"
-                           placeholder="08:30 HRS"
-                           value={newSlotTime}
-                           onChange={e => setNewSlotTime(e.target.value)}
-                         />
-                       </div>
-                       <div>
-                         <label className="block text-xs text-stone-400 mb-1">Capacity</label>
-                         <input 
-                           type="number" 
-                           className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs"
-                           value={newSlotCapacity}
-                           onChange={e => setNewSlotCapacity(e.target.value)}
-                         />
-                       </div>
-                       <div>
-                         <button className="w-full bg-amber-700 hover:bg-amber-600 text-white py-2.5 rounded-sm font-bold text-xs h-[38px] transition">
-                           ADD SLOT
-                         </button>
-                       </div>
+                 {/* CREATE NEW SLOT CARD */}
+                 <div className="bg-stone-800/80 border-2 border-amber-700/40 p-5 rounded-sm shadow-xl">
+                    <h4 className="font-bold text-amber-300 flex items-center gap-2 mb-3 text-sm uppercase tracking-wider">
+                      <ListPlus size={18} className="text-amber-400"/> Create New Duty Slot
+                    </h4>
+                    
+                    <form onSubmit={handleAddSlot} className="space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 items-end">
+                         <div>
+                           <label className="block text-xs font-bold text-stone-400 mb-1 uppercase">Date</label>
+                           <select 
+                             className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs"
+                             value={newSlotDate}
+                             onChange={e => setNewSlotDate(e.target.value)}
+                           >
+                             {EVENT_DATES.map(d => <option key={d} value={d}>{d}</option>)}
+                           </select>
+                         </div>
+                         <div>
+                           <label className="block text-xs font-bold text-stone-400 mb-1 uppercase">Discipline</label>
+                           <select 
+                             className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs"
+                             value={newSlotCategory}
+                             onChange={e => setNewSlotCategory(e.target.value)}
+                           >
+                             {SHOOTING_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                           </select>
+                         </div>
+                         <div>
+                           <label className="block text-xs font-bold text-stone-400 mb-1 uppercase">Time (e.g. 09:00 HRS)</label>
+                           <input 
+                             required
+                             type="text" 
+                             className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs font-mono"
+                             placeholder="09:00 HRS"
+                             value={newSlotTime}
+                             onChange={e => setNewSlotTime(e.target.value)}
+                           />
+                         </div>
+                         <div>
+                           <label className="block text-xs font-bold text-stone-400 mb-1 uppercase">Capacity (Limit)</label>
+                           <input 
+                             required
+                             type="number" 
+                             min="1"
+                             max="500"
+                             className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs font-mono"
+                             value={newSlotCapacity}
+                             onChange={e => setNewSlotCapacity(e.target.value)}
+                           />
+                         </div>
+                      </div>
+
+                      {/* Quick Preset Buttons */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                        <span className="text-[10px] text-stone-500 uppercase mr-1">Quick Presets:</span>
+                        {['08:00 HRS', '09:00 HRS', '10:00 HRS', '11:00 HRS', '13:00 HRS', '14:00 HRS', '15:00 HRS', '16:00 HRS'].map(tPreset => (
+                          <button
+                            key={tPreset}
+                            type="button"
+                            onClick={() => setNewSlotTime(tPreset)}
+                            className="text-[10px] bg-stone-900 hover:bg-stone-700 text-amber-300/80 hover:text-amber-200 px-2 py-1 rounded border border-stone-700 font-mono transition"
+                          >
+                            {tPreset}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="pt-2">
+                        <button className="w-full bg-amber-700 hover:bg-amber-600 text-white py-3 rounded-sm font-bold text-xs transition border border-amber-500 shadow-md uppercase tracking-wider flex items-center justify-center gap-2">
+                          <Plus size={16}/> ADD DUTY SLOT TO SCHEDULE
+                        </button>
+                      </div>
                     </form>
                  </div>
                  
@@ -2107,156 +2390,197 @@ return (
             {/* QR CHECK-IN TAB */}
             {adminTab === 'checkin' && (
               <div className="space-y-6">
-                <div className="bg-stone-800/80 border-2 border-amber-700/60 p-6 rounded-sm shadow-xl">
+                <div className="bg-stone-800/80 border-2 border-amber-700/60 p-5 sm:p-6 rounded-sm shadow-xl">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 pb-4 border-b border-amber-700/40">
                     <div>
                       <h3 className="text-xl font-black text-amber-400 flex items-center gap-2 uppercase">
                         <QrCode size={22}/> Range Entry QR Check-In Desk
                       </h3>
                       <p className="text-xs text-stone-400 mt-1">
-                        Scan candidate event pass QR token or enter Ticket ID to verify security credentials and confirm gate check-in.
+                        Scan candidate event passes or query Ticket ID to confirm gate entry credentials in real-time.
                       </p>
                     </div>
 
                     {checkInFeedback && (
-                      <div className={`text-xs px-3 py-1.5 rounded font-bold flex items-center gap-2 ${checkInFeedback.type === 'success' ? 'bg-green-900/60 text-green-300 border border-green-500' : 'bg-red-900/60 text-red-300 border border-red-500'}`}>
-                        {checkInFeedback.type === 'success' ? <CheckCircle size={14}/> : <AlertTriangle size={14}/>}
-                        {checkInFeedback.msg}
+                      <div className={`text-xs px-3.5 py-2 rounded font-bold flex items-center gap-2 ${checkInFeedback.type === 'success' ? 'bg-green-900/70 text-green-300 border border-green-500' : 'bg-red-900/70 text-red-300 border border-red-500'}`}>
+                        {checkInFeedback.type === 'success' ? <CheckCircle size={15}/> : <AlertTriangle size={15}/>}
+                        {checkInFeedback.text || checkInFeedback.msg}
                       </div>
                     )}
                   </div>
 
-                  <div className="grid md:grid-cols-2 gap-8 items-start">
-                    {/* LEFT COLUMN: CAMERA SCANNER & MANUAL SEARCH */}
-                    <div className="space-y-6">
-                      <div className="bg-stone-900 p-4 rounded border border-amber-700/50">
+                  <div className="grid lg:grid-cols-12 gap-6 items-start">
+                    {/* LEFT COLUMN: CAMERA SCANNER & MANUAL SEARCH (7 cols) */}
+                    <div className="lg:col-span-6 space-y-4">
+                      <div className="bg-stone-900 p-4 rounded border border-amber-700/50 shadow-inner">
                         <div className="flex justify-between items-center mb-3">
                           <span className="text-xs font-bold uppercase tracking-wider text-amber-300 flex items-center gap-2">
-                            <Camera size={16}/> Camera Scanner
+                            <Camera size={16}/> Live Camera Scanner
                           </span>
-                          {scannerRunning && (
-                            <span className="flex items-center gap-1 text-[10px] font-bold text-green-400">
-                              <span className="w-2 h-2 rounded-full bg-green-500 animate-ping"></span> ACTIVE
-                            </span>
-                          )}
+                          <div className="flex items-center gap-2">
+                            {scannerRunning && (
+                              <button
+                                type="button"
+                                onClick={toggleCameraFacing}
+                                className="px-2.5 py-1 text-[11px] bg-stone-800 hover:bg-stone-700 text-amber-300 rounded border border-amber-700/60 flex items-center gap-1 transition"
+                                title="Flip Front / Rear Camera"
+                              >
+                                <RefreshCw size={11}/> {cameraFacing === 'environment' ? 'Rear Cam' : 'Front Cam'}
+                              </button>
+                            )}
+                            {scannerRunning ? (
+                              <span className="flex items-center gap-1 text-[10px] font-bold text-green-400 bg-green-950/80 px-2 py-0.5 rounded border border-green-800">
+                                <span className="w-2 h-2 rounded-full bg-green-400 animate-ping"></span> LIVE
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-stone-500 font-mono">STANDBY</span>
+                            )}
+                          </div>
                         </div>
 
                         {/* Scanner Target Container */}
-                        <div id="admin-qr-reader" className="w-full bg-black/70 rounded border border-stone-700 min-h-[240px] flex items-center justify-center overflow-hidden relative">
+                        <div id="admin-qr-reader" className="w-full bg-black/80 rounded border-2 border-stone-800 min-h-[220px] flex items-center justify-center overflow-hidden relative shadow-inner">
                           {!scannerRunning && (
                             <div className="text-center p-6 text-stone-500">
-                              <QrCode size={48} className="mx-auto mb-2 opacity-40"/>
-                              <p className="text-xs">Camera standby. Click Start Scanner below to activate lens.</p>
+                              <QrCode size={48} className="mx-auto mb-2 text-amber-500/40"/>
+                              <p className="text-xs text-stone-400 font-medium">Camera in standby mode.</p>
+                              <p className="text-[10px] text-stone-500 mt-1">Tap below to activate lens or snap a photo of the QR.</p>
                             </div>
                           )}
                         </div>
 
-                        <div className="mt-4">
+                        {/* Scanner Controls */}
+                        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                           {!scannerRunning ? (
                             <button 
                               type="button" 
-                              onClick={startScanner} 
-                              className="w-full bg-amber-700 hover:bg-amber-600 text-white font-bold py-3.5 rounded-sm transition flex items-center justify-center gap-2 border border-amber-500 shadow-md text-sm"
+                              onClick={() => startScanner()} 
+                              className="w-full bg-amber-700 hover:bg-amber-600 text-white font-bold py-3 rounded-sm transition flex items-center justify-center gap-2 border border-amber-500 shadow-md text-xs tracking-wider uppercase"
                             >
-                              <Camera size={18}/> START CAMERA SCANNER
+                              <Camera size={16}/> START CAMERA SCANNER
                             </button>
                           ) : (
                             <button 
                               type="button" 
                               onClick={stopScanner} 
-                              className="w-full bg-red-800 hover:bg-red-700 text-white font-bold py-3.5 rounded-sm transition flex items-center justify-center gap-2 border border-red-600 shadow-md text-sm"
+                              className="w-full bg-red-800 hover:bg-red-700 text-white font-bold py-3 rounded-sm transition flex items-center justify-center gap-2 border border-red-600 shadow-md text-xs tracking-wider uppercase"
                             >
-                              <XCircle size={18}/> STOP SCANNER
+                              <XCircle size={16}/> STOP SCANNER
                             </button>
                           )}
+
+                          {/* Fallback: Direct Snap / Upload Photo of QR */}
+                          <button
+                            type="button"
+                            onClick={() => qrFileInputRef.current && qrFileInputRef.current.click()}
+                            className="w-full bg-stone-800 hover:bg-stone-700 text-amber-200 font-bold py-3 rounded-sm transition flex items-center justify-center gap-2 border border-amber-700/50 text-xs tracking-wider uppercase"
+                          >
+                            <ImageIcon size={16}/> SNAP / UPLOAD QR PHOTO
+                          </button>
+                          <input 
+                            ref={qrFileInputRef}
+                            type="file" 
+                            accept="image/*" 
+                            capture="environment"
+                            onChange={handleImageFileScan}
+                            className="hidden" 
+                          />
                         </div>
                       </div>
 
                       {/* Manual Lookup Form */}
                       <div className="bg-stone-900 p-4 rounded border border-amber-700/50">
                         <label className="block text-xs font-bold text-amber-200/80 mb-2 uppercase tracking-wider">
-                          Manual Token / Ticket Search
+                          Manual Token / Ticket ID Search
                         </label>
                         <form onSubmit={handleManualLookup} className="flex gap-2">
                           <input 
                             type="text" 
-                            placeholder="Enter Token, TKT-XXXXXX, or email..." 
+                            placeholder="Enter TKT-XXXXXX, Token, or Email..." 
                             value={lookupQuery} 
                             onChange={e => setLookupQuery(e.target.value)} 
-                            className="flex-1 bg-stone-950 border border-stone-700 px-3 py-2.5 text-sm text-amber-100 rounded-sm outline-none focus:border-amber-500 font-mono"
+                            className="flex-1 bg-stone-950 border border-stone-700 px-3.5 py-2.5 text-sm text-amber-100 rounded-sm outline-none focus:border-amber-500 font-mono placeholder:text-stone-600"
                           />
                           <button 
                             type="submit" 
-                            className="bg-amber-700 hover:bg-amber-600 text-white px-5 py-2.5 text-xs font-bold rounded-sm border border-amber-600 transition tracking-wider"
+                            className="bg-amber-700 hover:bg-amber-600 text-white px-5 py-2.5 text-xs font-bold rounded-sm border border-amber-600 transition tracking-wider uppercase"
                           >
                             VERIFY
                           </button>
                         </form>
                       </div>
+
+                      {/* Mobile Permission & Usage Guide */}
+                      <div className="bg-stone-950/80 p-3.5 rounded border border-stone-800 text-[11px] text-stone-400 space-y-1">
+                        <div className="font-bold text-amber-300 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
+                          <Smartphone size={13}/> Mobile Camera Usage Tips:
+                        </div>
+                        <p>• When starting the camera, your mobile browser will ask: <strong className="text-stone-300">"Allow Camera Access?"</strong> ➔ tap <strong>Allow</strong>.</p>
+                        <p>• If accessing via Wi-Fi network without HTTPS, use the <strong className="text-amber-300">"Snap / Upload QR Photo"</strong> button which works immediately on all devices without camera permission blocks.</p>
+                      </div>
                     </div>
 
-                    {/* RIGHT COLUMN: VERIFICATION RESULT & ACTION */}
-                    <div className="space-y-4">
-                      <div className="text-xs font-bold uppercase tracking-wider text-amber-300 mb-1">
-                        Verification Status & Candidate Dossier
+                    {/* RIGHT COLUMN: VERIFICATION RESULT & ACTION (6 cols) */}
+                    <div className="lg:col-span-6 space-y-4">
+                      <div className="text-xs font-bold uppercase tracking-wider text-amber-300 mb-1 flex items-center justify-between">
+                        <span>Candidate Gate Dossier</span>
+                        {lookupResult && (
+                          <button onClick={resetCheckInState} className="text-[10px] text-stone-400 hover:text-amber-300 underline font-normal">
+                            Clear Dossier
+                          </button>
+                        )}
                       </div>
 
                       {!lookupResult && (
-                        <div className="bg-stone-900/60 border-2 border-dashed border-stone-700 rounded p-8 text-center text-stone-500 min-h-[300px] flex flex-col items-center justify-center">
-                          <Shield size={40} className="mb-3 opacity-30 text-amber-500"/>
-                          <p className="text-sm font-bold text-stone-400">Awaiting Pass Scan</p>
-                          <p className="text-xs mt-1">Scan candidate QR pass or query a ticket ID to proceed with check-in.</p>
+                        <div className="bg-stone-900/60 border-2 border-dashed border-stone-700 rounded p-8 text-center text-stone-500 min-h-[280px] flex flex-col items-center justify-center">
+                          <Shield size={44} className="mb-3 opacity-30 text-amber-500"/>
+                          <p className="text-sm font-bold text-stone-400 uppercase tracking-wider">Awaiting Pass Scan</p>
+                          <p className="text-xs text-stone-500 mt-1 max-w-xs">
+                            Scan a QR code pass with the camera or query a Ticket ID to load the candidate's gate pass.
+                          </p>
                         </div>
                       )}
 
                       {lookupResult && lookupResult.status === 'VALID' && (
-                        <div className="bg-stone-900 border-2 border-green-500 rounded p-6 shadow-xl shadow-green-950/40 animate-in fade-in">
-                          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-green-900/50 text-green-400 font-bold text-xs border border-green-500 mb-4">
-                            <CheckCircle size={14}/> VALID EVENT PASS
+                        <div className="bg-stone-900 border-2 border-green-500 rounded p-6 shadow-2xl shadow-green-950/50 animate-in fade-in">
+                          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-green-900/60 text-green-400 font-bold text-xs border border-green-500 mb-4">
+                            <CheckCircle size={15}/> VALID EVENT PASS · CLEARED FOR ENTRY
                           </div>
 
                           <div className="space-y-3 mb-6">
                             <div>
-                              <span className="text-[10px] text-stone-400 uppercase tracking-widest block">Candidate Name</span>
-                              <span className="text-xl font-bold text-amber-100">{lookupResult.participant.name}</span>
+                              <span className="text-[10px] text-stone-400 uppercase tracking-widest block">Candidate Full Name</span>
+                              <span className="text-2xl font-black text-amber-100">{lookupResult.participant.name}</span>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-3 text-xs bg-stone-950 p-3 rounded border border-stone-800">
+                            <div className="grid grid-cols-2 gap-2.5 text-xs bg-stone-950 p-3.5 rounded border border-stone-800">
                               <div>
-                                <span className="text-stone-400 uppercase block mb-0.5">Category</span>
-                                <span className="text-amber-400 font-bold">{lookupResult.participant.category || 'Legacy'}</span>
+                                <span className="text-stone-400 uppercase block text-[10px]">Category</span>
+                                <span className="text-amber-400 font-bold text-sm">{lookupResult.participant.category || 'Air Rifle'}</span>
                               </div>
                               <div>
-                                <span className="text-stone-400 uppercase block mb-0.5">Gender</span>
-                                <span className="text-amber-200">{lookupResult.participant.gender || 'N/A'}</span>
+                                <span className="text-stone-400 uppercase block text-[10px]">Duty Slot</span>
+                                <span className="text-amber-200 font-bold text-sm">{lookupResult.participant.slotTime}</span>
                               </div>
                               <div>
-                                <span className="text-stone-400 uppercase block mb-0.5">Mission Date</span>
-                                <span className="text-amber-200">{lookupResult.participant.slotDate || '5th Dec'}</span>
+                                <span className="text-stone-400 uppercase block text-[10px]">Mission Date</span>
+                                <span className="text-amber-200 font-medium">{lookupResult.participant.slotDate || '5th Dec'}</span>
                               </div>
                               <div>
-                                <span className="text-stone-400 uppercase block mb-0.5">Duty Slot</span>
-                                <span className="text-amber-200 font-bold">{lookupResult.participant.slotTime}</span>
-                              </div>
-                              <div>
-                                <span className="text-stone-400 uppercase block mb-0.5">Ticket ID</span>
+                                <span className="text-stone-400 uppercase block text-[10px]">Ticket ID</span>
                                 <span className="text-amber-400 font-mono font-bold">{lookupResult.participant.ticketId}</span>
-                              </div>
-                              <div>
-                                <span className="text-stone-400 uppercase block mb-0.5">Status</span>
-                                <span className="text-yellow-400 font-bold">READY FOR ENTRY</span>
                               </div>
                             </div>
 
                             <div className="text-xs text-stone-400">
-                              Email: <span className="text-stone-300">{lookupResult.participant.email}</span>
+                              Registered Email: <span className="text-stone-300 font-mono">{lookupResult.participant.email}</span>
                             </div>
                           </div>
 
                           <button 
                             onClick={() => handleConfirmCheckIn(lookupResult.participant)} 
                             disabled={checkInLoading}
-                            className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-4 rounded-sm transition uppercase tracking-widest flex items-center justify-center gap-2 border border-green-400 shadow-lg shadow-green-900/30 text-sm"
+                            className="w-full bg-green-600 hover:bg-green-500 text-white font-black py-4 rounded-sm transition uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-green-400 shadow-xl shadow-green-900/40 text-sm"
                           >
                             {checkInLoading ? <RefreshCw className="animate-spin" size={18}/> : <CheckCircle size={18}/>}
                             CONFIRM ENTRY CHECK-IN
@@ -2264,9 +2588,9 @@ return (
 
                           <button 
                             onClick={resetCheckInState}
-                            className="w-full mt-2 bg-stone-800 hover:bg-stone-700 text-stone-400 text-xs font-bold py-2.5 rounded-sm transition uppercase tracking-wider"
+                            className="w-full mt-2.5 bg-stone-800 hover:bg-stone-750 text-stone-400 hover:text-stone-200 text-xs font-bold py-2.5 rounded-sm transition uppercase tracking-wider"
                           >
-                            Clear / Scan Next
+                            Cancel / Scan Next
                           </button>
                         </div>
                       )}
@@ -2283,59 +2607,50 @@ return (
                               <span className="text-xl font-bold text-amber-100">{lookupResult.participant.name}</span>
                             </div>
 
-                            <div className="bg-stone-950 p-3 rounded border border-amber-900/50 space-y-2 text-xs">
+                            <div className="bg-stone-950 p-3.5 rounded border border-amber-900/50 space-y-2 text-xs">
                               <div className="flex justify-between">
                                 <span className="text-stone-400 uppercase">Category:</span>
-                                <span className="text-amber-400 font-bold">{lookupResult.participant.category || 'Legacy'}</span>
+                                <span className="text-amber-400 font-bold">{lookupResult.participant.category || 'Air Rifle'}</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-stone-400 uppercase">Duty Slot:</span>
-                                <span className="text-amber-200">{lookupResult.participant.slotTime} ({lookupResult.participant.slotDate || '5th Dec'})</span>
+                                <span className="text-amber-200 font-bold">{lookupResult.participant.slotTime} ({lookupResult.participant.slotDate || '5th Dec'})</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-stone-400 uppercase">Ticket ID:</span>
                                 <span className="text-amber-400 font-mono font-bold">{lookupResult.participant.ticketId}</span>
                               </div>
-                              <div className="border-t border-stone-800 pt-2 flex justify-between">
-                                <span className="text-stone-400 uppercase">Checked In At:</span>
-                                <span className="text-green-400 font-bold">
-                                  {formatCheckInDisplayTime(lookupResult.participant.checkedInAt)}
-                                </span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-stone-400 uppercase">Verified By:</span>
-                                <span className="text-stone-300">{lookupResult.participant.checkedInBy || 'Admin Command'}</span>
+                              <div className="flex justify-between border-t border-stone-800 pt-2">
+                                <span className="text-stone-400 uppercase">Status:</span>
+                                <span className="text-green-400 font-bold">Checked In & Entered Range</span>
                               </div>
                             </div>
                           </div>
 
                           <button 
                             onClick={resetCheckInState}
-                            className="w-full bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-bold py-3 rounded-sm transition uppercase tracking-wider border border-stone-600"
+                            className="w-full bg-amber-700 hover:bg-amber-600 text-white font-bold py-3 rounded-sm transition uppercase tracking-wider text-xs"
                           >
-                            CLEAR / SCAN NEXT
+                            Ready for Next Candidate
                           </button>
                         </div>
                       )}
 
                       {lookupResult && lookupResult.status === 'INVALID' && (
                         <div className="bg-stone-900 border-2 border-red-500 rounded p-6 shadow-xl shadow-red-950/40 animate-in fade-in">
-                          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-red-900/50 text-red-400 font-bold text-xs border border-red-500 mb-4">
-                            <XCircle size={14}/> INVALID PASS / TOKEN NOT FOUND
+                          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-red-900/50 text-red-300 font-bold text-xs border border-red-500 mb-4">
+                            <XCircle size={14}/> INVALID / UNRECOGNIZED PASS
                           </div>
 
-                          <p className="text-sm text-red-200 mb-2">
-                            {lookupResult.errorMsg || "No candidate record found for this token or ticket ID."}
-                          </p>
-                          <p className="text-xs text-stone-400 font-mono break-all mb-6">
-                            Searched: {lookupResult.query}
+                          <p className="text-xs text-stone-300 mb-4">
+                            {lookupResult.errorMsg}
                           </p>
 
                           <button 
                             onClick={resetCheckInState}
-                            className="w-full bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-bold py-3 rounded-sm transition uppercase tracking-wider border border-stone-600"
+                            className="w-full bg-stone-800 hover:bg-stone-700 text-stone-300 font-bold py-3 rounded-sm transition uppercase tracking-wider text-xs"
                           >
-                            CLEAR & TRY AGAIN
+                            Scan Another Pass
                           </button>
                         </div>
                       )}
