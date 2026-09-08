@@ -17,7 +17,7 @@
 
 **SHAURYA-LAKSHYA** is a real-time event management system built for the NCC Air Rifle Shooting Competition. It serves as the **primary key for event participants to select their firing slots** and features a **dynamically updated leaderboard** with live score entry.
 
-The system was designed to handle high-volume participant registration, slot capacity management, and real-time score tracking during the 2-day shooting event (5th & 6th December).
+The system was designed to handle high-volume participant registration, slot capacity management, and real-time score tracking during the 2-day shooting event (26th & 27th September).
 
 ---
 
@@ -116,8 +116,8 @@ shaurya-lakshya/
 
 | Date | Time Slots | Capacity per Slot |
 |------|------------|-------------------|
-| 5th December | 08:00 - 16:00 HRS (8 slots) | 60 participants |
-| 6th December | 08:00 - 16:00 HRS (8 slots) | 60 participants |
+| 26th September | 08:00 - 16:00 HRS (8 slots) | 60 participants |
+| 27th September | 08:00 - 16:00 HRS (8 slots) | 60 participants |
 
 ---
 

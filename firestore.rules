@@ -15,7 +15,8 @@ service cloud.firestore {
           "nccrvce2025@gmail.com",
           "nccrvceshaurya@gmail.com",
           "lokakshas.cs24@rvce.edu.in",
-          "shaurya.lakshya.admin@gmail.com"
+          "shaurya.lakshya.admin@gmail.com",
+          "rvcecdtlokakshasridhar@gmail.com"
         ];
     }
 
@@ -76,8 +77,8 @@ service cloud.firestore {
           request.resource.data.email is string &&
           request.resource.data.email.size() > 3 &&
           request.resource.data.email.size() <= 120 &&
-          request.resource.data.gender in ['Male', 'Female'] &&
-          request.resource.data.category in ['Air Rifle', 'Pistol'] &&
+          request.resource.data.gender in ['Male', 'Female', 'General'] &&
+          request.resource.data.category in ['Air Rifle', 'Air Pistol', 'Pistol'] &&
           request.resource.data.ticketId is string &&
           request.resource.data.qrToken is string &&
           request.resource.data.slotId is string &&
