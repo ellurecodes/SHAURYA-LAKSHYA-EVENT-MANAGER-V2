@@ -1164,19 +1164,53 @@ export default function ShauryaLakshyaApp() {
     }
   };
 
+  const stopScanner = async () => {
+    try {
+      if (html5QrCodeRef.current) {
+        if (html5QrCodeRef.current.isScanning) {
+          await html5QrCodeRef.current.stop();
+        }
+        await html5QrCodeRef.current.clear();
+      }
+    } catch (err) {
+      console.warn("Error stopping/clearing scanner:", err);
+    } finally {
+      html5QrCodeRef.current = null;
+      setScannerRunning(false);
+    }
+  };
+
   const startScanner = async (facing = cameraFacing) => {
     setCheckInFeedback(null);
     setLookupResult(null);
+
+    // Stop and clear any existing instance first
+    await stopScanner();
+
+    // Verify DOM container is mounted
+    const readerElem = document.getElementById("admin-qr-reader");
+    if (!readerElem) {
+      setCheckInFeedback({ type: 'error', text: "Camera scanner element not found in DOM." });
+      return;
+    }
+
     try {
-      if (!html5QrCodeRef.current) {
-        html5QrCodeRef.current = new Html5Qrcode("admin-qr-reader");
-      }
-      if (html5QrCodeRef.current.isScanning) {
-        await html5QrCodeRef.current.stop();
-      }
-      await html5QrCodeRef.current.start(
+      const qrScanner = new Html5Qrcode("admin-qr-reader");
+      html5QrCodeRef.current = qrScanner;
+
+      const qrboxCalc = (viewfinderWidth, viewfinderHeight) => {
+        const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+        const edge = Math.max(160, Math.min(Math.floor(minEdge * 0.75), 260));
+        return { width: edge, height: edge };
+      };
+
+      await qrScanner.start(
         { facingMode: facing },
-        { fps: 12, qrbox: { width: 230, height: 230 } },
+        {
+          fps: 10,
+          qrbox: qrboxCalc,
+          aspectRatio: 1.0
+        },
         (decodedText) => {
           stopScanner();
           triggerScanSuccessEffects();
@@ -1188,11 +1222,15 @@ export default function ShauryaLakshyaApp() {
     } catch (err) {
       console.error("Camera scanner start error:", err);
       let msg = "Camera access failed: " + (err.message || "Permission denied.");
-      if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      if (typeof window !== 'undefined' && window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
         msg = "Note: Live camera requires HTTPS or localhost on mobile. You can use '📷 Snap / Upload QR Photo' below or enter Ticket ID manually!";
       }
       setCheckInFeedback({ type: 'error', text: msg });
       setScannerRunning(false);
+      if (html5QrCodeRef.current) {
+        try { html5QrCodeRef.current.clear(); } catch (e) { }
+        html5QrCodeRef.current = null;
+      }
     }
   };
 
@@ -1210,15 +1248,13 @@ export default function ShauryaLakshyaApp() {
     if (!file) return;
     setCheckInFeedback(null);
     setLookupResult(null);
+
+    await stopScanner();
+
     try {
-      if (!html5QrCodeRef.current) {
-        html5QrCodeRef.current = new Html5Qrcode("admin-qr-reader");
-      }
-      if (html5QrCodeRef.current.isScanning) {
-        await html5QrCodeRef.current.stop();
-        setScannerRunning(false);
-      }
-      const decodedText = await html5QrCodeRef.current.scanFile(file, true);
+      const qrScanner = new Html5Qrcode("admin-qr-reader");
+      const decodedText = await qrScanner.scanFile(file, true);
+      try { qrScanner.clear(); } catch (cErr) { }
       triggerScanSuccessEffects();
       handleVerifyToken(decodedText);
     } catch (err) {
@@ -1226,17 +1262,6 @@ export default function ShauryaLakshyaApp() {
       setCheckInFeedback({ type: 'error', text: "Could not detect QR in the selected picture. Ensure the QR is clear and well-lit." });
     }
     e.target.value = '';
-  };
-
-  const stopScanner = async () => {
-    if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
-      try {
-        await html5QrCodeRef.current.stop();
-      } catch (err) {
-        console.error("Error stopping scanner:", err);
-      }
-    }
-    setScannerRunning(false);
   };
 
   const handleVerifyToken = (rawQuery) => {
@@ -2750,7 +2775,10 @@ export default function ShauryaLakshyaApp() {
                         </div>
 
                         {/* Scanner Target Container */}
-                        <div id="admin-qr-reader" className="w-full bg-black/80 rounded border-2 border-stone-800 min-h-[220px] flex items-center justify-center overflow-hidden relative shadow-inner">
+                        <div className="w-full bg-black/80 rounded border-2 border-stone-800 min-h-[240px] flex flex-col items-center justify-center overflow-hidden relative shadow-inner">
+                          {/* Dedicated empty DOM container for Html5Qrcode - NO REACT CHILDREN */}
+                          <div id="admin-qr-reader" className={`w-full ${scannerRunning ? 'block' : 'hidden'}`} />
+
                           {!scannerRunning && (
                             <div className="text-center p-6 text-stone-500">
                               <QrCode size={48} className="mx-auto mb-2 text-amber-500/40" />
