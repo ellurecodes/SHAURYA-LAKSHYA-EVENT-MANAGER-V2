@@ -1,7 +1,8 @@
 # 🎯 SHAURYA-LAKSHYA Event Manager V2
 
 **🌐 Live Website:** [https://shaurya-lakshya-event-manager.vercel.app/](https://shaurya-lakshya-event-manager.vercel.app/)  
-**📖 Complete V2 Features Guide:** See [NEW_FEATURES_GUIDE.md](./NEW_FEATURES_GUIDE.md) for full operational documentation.
+**📖 Complete V2 Features Guide:** See [NEW_FEATURES_GUIDE.md](./NEW_FEATURES_GUIDE.md) for full operational documentation.  
+**🗄️ Database Schema & Architecture:** See [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) for data model specifications.
 
 > **Official Slot Booking & Live Scoring System for the NCC Air Rifle & Pistol Shooting Event**  
 > Powered by Precihole Sports | 8th Mile Fest, RVCE

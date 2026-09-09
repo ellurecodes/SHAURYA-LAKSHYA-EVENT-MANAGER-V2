@@ -228,6 +228,8 @@ export default function ShauryaLakshyaApp() {
   // Admin QR Check-In State
   const [scannerRunning, setScannerRunning] = useState(false);
   const [cameraFacing, setCameraFacing] = useState('environment');
+  const [availableCameras, setAvailableCameras] = useState([]);
+  const [activeCameraId, setActiveCameraId] = useState(null);
   const [lookupQuery, setLookupQuery] = useState('');
   const [lookupResult, setLookupResult] = useState(null);
   const [checkInLoading, setCheckInLoading] = useState(false);
@@ -1180,17 +1182,23 @@ export default function ShauryaLakshyaApp() {
     }
   };
 
-  const startScanner = async (facing = cameraFacing) => {
+  const startScanner = async (overrideFacingOrId = null) => {
     setCheckInFeedback(null);
     setLookupResult(null);
 
     // Stop and clear any existing instance first
     await stopScanner();
 
-    // Verify DOM container is mounted
+    // Make sure scanner state is running immediately so DOM is visible with layout dimensions
+    setScannerRunning(true);
+
+    // Give browser time to layout container dimensions
+    await new Promise(resolve => setTimeout(resolve, 120));
+
     const readerElem = document.getElementById("admin-qr-reader");
     if (!readerElem) {
       setCheckInFeedback({ type: 'error', text: "Camera scanner element not found in DOM." });
+      setScannerRunning(false);
       return;
     }
 
@@ -1198,27 +1206,66 @@ export default function ShauryaLakshyaApp() {
       const qrScanner = new Html5Qrcode("admin-qr-reader");
       html5QrCodeRef.current = qrScanner;
 
+      // Camera selection strategy:
+      // By default on mobile devices, requesting { facingMode: "environment" } instructs the OS / browser
+      // to pick the primary high-resolution rear RGB camera (avoiding auxiliary depth/macro/ToF sensors).
+      let camConfig = { facingMode: "environment" };
+
+      if (overrideFacingOrId) {
+        if (overrideFacingOrId === 'user') {
+          camConfig = { facingMode: "user" };
+          setCameraFacing('user');
+        } else if (overrideFacingOrId === 'environment') {
+          camConfig = { facingMode: "environment" };
+          setCameraFacing('environment');
+        } else if (typeof overrideFacingOrId === 'string') {
+          camConfig = { deviceId: { exact: overrideFacingOrId } };
+          setActiveCameraId(overrideFacingOrId);
+        }
+      } else {
+        setCameraFacing('environment');
+      }
+
       const qrboxCalc = (viewfinderWidth, viewfinderHeight) => {
         const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-        const edge = Math.max(160, Math.min(Math.floor(minEdge * 0.75), 260));
+        const edge = Math.max(160, Math.min(Math.floor(minEdge * 0.72), 260));
         return { width: edge, height: edge };
       };
 
-      await qrScanner.start(
-        { facingMode: facing },
-        {
-          fps: 10,
-          qrbox: qrboxCalc,
-          aspectRatio: 1.0
-        },
-        (decodedText) => {
-          stopScanner();
-          triggerScanSuccessEffects();
-          handleVerifyToken(decodedText);
-        },
-        () => { }
-      );
-      setScannerRunning(true);
+      const scanConfig = {
+        fps: 15,
+        qrbox: qrboxCalc
+      };
+
+      const onScanSuccess = (decodedText) => {
+        stopScanner();
+        triggerScanSuccessEffects();
+        handleVerifyToken(decodedText);
+      };
+
+      try {
+        await qrScanner.start(camConfig, scanConfig, onScanSuccess, () => { });
+      } catch (firstErr) {
+        console.warn("Camera start with primary config failed, attempting fallback:", firstErr);
+        // If environment facing mode failed (e.g. desktop webcam without rear camera), try front camera
+        if (camConfig && camConfig.facingMode === 'environment') {
+          camConfig = { facingMode: "user" };
+          setCameraFacing('user');
+          await qrScanner.start(camConfig, scanConfig, onScanSuccess, () => { });
+        } else {
+          throw firstErr;
+        }
+      }
+
+      // Now that camera permissions are active, enumerate cameras to populate the switcher
+      try {
+        const devices = await Html5Qrcode.getCameras();
+        if (devices && devices.length > 0) {
+          setAvailableCameras(devices);
+        }
+      } catch (camErr) {
+        console.warn("Could not enumerate device cameras:", camErr);
+      }
     } catch (err) {
       console.error("Camera scanner start error:", err);
       let msg = "Camera access failed: " + (err.message || "Permission denied.");
@@ -1226,21 +1273,22 @@ export default function ShauryaLakshyaApp() {
         msg = "Note: Live camera requires HTTPS or localhost on mobile. You can use '📷 Snap / Upload QR Photo' below or enter Ticket ID manually!";
       }
       setCheckInFeedback({ type: 'error', text: msg });
-      setScannerRunning(false);
-      if (html5QrCodeRef.current) {
-        try { html5QrCodeRef.current.clear(); } catch (e) { }
-        html5QrCodeRef.current = null;
-      }
+      await stopScanner();
     }
   };
 
   const toggleCameraFacing = async () => {
+    if (availableCameras.length > 1) {
+      const currIdx = availableCameras.findIndex(c => c.id === activeCameraId);
+      const nextIdx = (currIdx + 1) % availableCameras.length;
+      const nextCam = availableCameras[nextIdx];
+      setActiveCameraId(nextCam.id);
+      await startScanner(nextCam.id);
+      return;
+    }
     const nextFacing = cameraFacing === 'environment' ? 'user' : 'environment';
     setCameraFacing(nextFacing);
-    if (scannerRunning) {
-      await stopScanner();
-      await startScanner(nextFacing);
-    }
+    await startScanner(nextFacing);
   };
 
   const handleImageFileScan = async (e) => {
@@ -2758,8 +2806,8 @@ export default function ShauryaLakshyaApp() {
                               <button
                                 type="button"
                                 onClick={toggleCameraFacing}
-                                className="px-2.5 py-1 text-[11px] bg-stone-800 hover:bg-stone-700 text-amber-300 rounded border border-amber-700/60 flex items-center gap-1 transition"
-                                title="Flip Front / Rear Camera"
+                                className="px-2.5 py-1 text-[11px] bg-stone-800 hover:bg-stone-700 text-amber-300 rounded border border-amber-700/60 flex items-center gap-1 transition shadow-sm active:scale-95"
+                                title="Flip Front / Rear Camera Lens"
                               >
                                 <RefreshCw size={11} /> {cameraFacing === 'environment' ? 'Rear Cam' : 'Front Cam'}
                               </button>
@@ -2775,15 +2823,19 @@ export default function ShauryaLakshyaApp() {
                         </div>
 
                         {/* Scanner Target Container */}
-                        <div className="w-full bg-black/80 rounded border-2 border-stone-800 min-h-[240px] flex flex-col items-center justify-center overflow-hidden relative shadow-inner">
+                        <div className="w-full bg-stone-950 rounded border-2 border-stone-800 min-h-[260px] flex flex-col items-center justify-center overflow-hidden relative shadow-inner">
                           {/* Dedicated empty DOM container for Html5Qrcode - NO REACT CHILDREN */}
-                          <div id="admin-qr-reader" className={`w-full ${scannerRunning ? 'block' : 'hidden'}`} />
+                          <div
+                            id="admin-qr-reader"
+                            className="w-full"
+                            style={{ display: scannerRunning ? 'block' : 'none', minHeight: scannerRunning ? '240px' : '0px' }}
+                          />
 
                           {!scannerRunning && (
                             <div className="text-center p-6 text-stone-500">
                               <QrCode size={48} className="mx-auto mb-2 text-amber-500/40" />
                               <p className="text-xs text-stone-400 font-medium">Camera in standby mode.</p>
-                              <p className="text-[10px] text-stone-500 mt-1">Tap below to activate lens or snap a photo of the QR.</p>
+                              <p className="text-[10px] text-stone-500 mt-1">Tap below to activate rear camera or snap a photo of the QR.</p>
                             </div>
                           )}
                         </div>
