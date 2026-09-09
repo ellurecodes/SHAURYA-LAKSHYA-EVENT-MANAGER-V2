@@ -4,22 +4,23 @@ import { Target, Calendar, Trophy, Users, LogIn, Download, Upload, Save, Trash2,
 import { QRCodeSVG } from 'qrcode.react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signOut, 
+import {
+  getAuth,
+  signOut,
   onAuthStateChanged,
   signInAnonymously,
   GoogleAuthProvider,
   signInWithPopup
 } from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  doc, 
-  addDoc, 
-  deleteDoc, 
-  onSnapshot, 
-  query, 
+import {
+  getFirestore,
+  collection,
+  doc,
+  addDoc,
+  setDoc,
+  deleteDoc,
+  onSnapshot,
+  query,
   updateDoc,
   getDocs,
   runTransaction,
@@ -28,54 +29,61 @@ import {
 
 // --- FIREBASE SETUP ---
 const firebaseConfig = {
-  apiKey: "AIzaSyD8eRxPpVUOiU6pV0u3_I6pCFfOaw5UeaA",
-  authDomain: "shaurya-lakshya-event.firebaseapp.com",
-  projectId: "shaurya-lakshya-event",
-  storageBucket: "shaurya-lakshya-event.firebasestorage.app",
-  messagingSenderId: "152287825820",
-  appId: "1:152287825820:web:da682c3a540087b3cd0259",
-  measurementId: "G-C26DDLDHB9"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyDinys28Nidl3Fjzw0ESuk58G3K8ZRui88",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "lakshya-2026.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "lakshya-2026",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "lakshya-2026.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "675947155217",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:675947155217:web:606d6469cc1b46e90206b0",
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-1TWLF8M7P9"
 };
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = "shaurya-lakshya-event"; 
+const appId = firebaseConfig.projectId || "lakshya-2026";
 
 // --- SECURITY CONSTANTS ---
 const ALLOWED_ADMIN_EMAILS = [
   "nccrvce2025@gmail.com",
-  "nccrvceshaurya@gmail.com", 
-  "lokakshas.cs24@rvce.edu.in", 
-  "shaurya.lakshya.admin@gmail.com"
+  "nccrvceshaurya@gmail.com",
+  "lokakshas.cs24@rvce.edu.in",
+  "shaurya.lakshya.admin@gmail.com",
+  "rvcecdtlokakshasridhar@gmail.com"
 ];
 
-const EVENT_DATES = ["5th Dec", "6th Dec"];
-const STANDARD_SCHEDULE = [
-  { time: "08:00 HRS", capacity: 60 },
-  { time: "09:00 HRS", capacity: 60 },
-  { time: "10:00 HRS", capacity: 60 },
-  { time: "11:00 HRS", capacity: 60 },
-  { time: "13:00 HRS", capacity: 60 },
-  { time: "14:00 HRS", capacity: 60 },
-  { time: "15:00 HRS", capacity: 60 },
-  { time: "16:00 HRS", capacity: 60 },
+const EVENT_DATES = ["26th September", "27th September"];
+const STANDARD_HOURLY_TIMES = [
+  "08:00 HRS",
+  "09:00 HRS",
+  "10:00 HRS",
+  "11:00 HRS",
+  "13:00 HRS",
+  "14:00 HRS",
+  "15:00 HRS",
+  "16:00 HRS",
 ];
 
-const SHOOTING_CATEGORIES = ["Air Rifle", "Pistol"];
+const SHOOTING_CATEGORIES = ["Air Rifle", "Air Pistol"];
+
+// Capacity rule: 18 slots per hour for Air Rifle, 6 slots per hour for Air Pistol
+const getDisciplineCapacity = (category) => {
+  return (category === 'Air Rifle' || category === 'Rifle') ? 18 : 6;
+};
 
 const generateDefaultSlots = () => {
   const result = [];
   EVENT_DATES.forEach(date => {
     SHOOTING_CATEGORIES.forEach(category => {
-      STANDARD_SCHEDULE.forEach((s, index) => {
-        const tStr = s.time.trim();
+      const cap = getDisciplineCapacity(category);
+      STANDARD_HOURLY_TIMES.forEach((timeStr, index) => {
+        const tStr = timeStr.trim();
         const match = tStr.match(/(\d{1,2}):(\d{2})/);
         const sortVal = match ? parseInt(match[1], 10) * 60 + parseInt(match[2], 10) : index * 60;
         result.push({
           id: `std_slot_${date.replace(/[\s.]+/g, '_')}_${category.replace(/[\s.]+/g, '_')}_${index}`,
           time: tStr,
-          capacity: s.capacity || 60,
+          capacity: cap,
           date: date,
           category: category,
           booked: 0,
@@ -87,45 +95,68 @@ const generateDefaultSlots = () => {
   return result;
 };
 
+// Cleanup legacy caches to ensure fresh September schedule & discipline capacities
+try {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem('lakshya_slots_v4');
+    localStorage.removeItem('lakshya_participants_v4');
+    localStorage.removeItem('lakshya_emails_v4');
+    localStorage.removeItem('lakshya_slots_v5'); // purge old 60 capacity slots
+  }
+} catch (e) { }
+
 const getInitialSlots = () => {
   try {
-    const saved = localStorage.getItem('lakshya_slots_v4');
+    const saved = localStorage.getItem('lakshya_slots_v6');
     if (saved) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const hasLegacyDates = parsed.some(s => (s.date || '').includes('Dec'));
+        if (!hasLegacyDates) {
+          return parsed.map(s => {
+            const cat = (s.category === 'Pistol' || s.category === 'Air Pistol') ? 'Air Pistol' : 'Air Rifle';
+            const expectedCap = getDisciplineCapacity(cat);
+            return {
+              ...s,
+              category: cat,
+              capacity: (s.capacity === 60 || !s.capacity) ? expectedCap : s.capacity
+            };
+          });
+        }
+      }
     }
-  } catch (e) {}
+  } catch (e) { }
   const defaults = generateDefaultSlots();
   try {
-    localStorage.setItem('lakshya_slots_v4', JSON.stringify(defaults));
-  } catch (e) {}
+    localStorage.setItem('lakshya_slots_v6', JSON.stringify(defaults));
+  } catch (e) { }
   return defaults;
 };
 
 const getInitialParticipants = () => {
   try {
-    const saved = localStorage.getItem('lakshya_participants_v4');
+    const saved = localStorage.getItem('lakshya_participants_v6') || localStorage.getItem('lakshya_participants_v5');
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed)) return parsed;
     }
-  } catch (e) {}
+  } catch (e) { }
   return [];
 };
 
 const getInitialAllowedEmails = () => {
   try {
-    const saved = localStorage.getItem('lakshya_emails_v4');
+    const saved = localStorage.getItem('lakshya_emails_v6') || localStorage.getItem('lakshya_emails_v5');
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed)) return parsed;
     }
-  } catch (e) {}
+  } catch (e) { }
   return [];
 };
 
 const WEAPON_IMAGES = [
-  
+
   { src: "/achilles.jpg", title: "Achilles X3", desc: "Precision PCP Rifle" },
   { src: "/minotaur.jpg", title: "PX120 Minotaur", desc: "Tactical Bullpup Design" },
   { src: "/benchrest.jpg", title: "Benchrest Special", desc: "Competition Grade Accuracy" },
@@ -136,22 +167,22 @@ const WEAPON_IMAGES = [
   { src: "/DSC03839.jpg", title: "Tactical Sniper", desc: "High-Powered Scoped Precision" },
   { src: "/DSC05738.jpg", title: "Competition Pistols", desc: "Dual Set Match Grade Air Pistols" },
   { src: "/DSC09093.jpg", title: "Advanced PCP", desc: "Pre-Charged Pneumatic Target Rifle" }
-  
+
 ];
 
 // --- COMPONENT ---
 export default function ShauryaLakshyaApp() {
   // State
   const [user, setUser] = useState(null);
-  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false); 
-  const [view, setView] = useState('home'); 
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
+  const [view, setView] = useState('home');
   const [participants, setParticipants] = useState(getInitialParticipants);
   const [slots, setSlots] = useState(getInitialSlots);
   const [allowedEmails, setAllowedEmails] = useState(getInitialAllowedEmails);
   const [loading, setLoading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [processingAction, setProcessingAction] = useState(false);
-  const [dbError, setDbError] = useState(null); 
+  const [dbError, setDbError] = useState(null);
 
   // Admin State
   const [adminTab, setAdminTab] = useState('slots');
@@ -159,15 +190,15 @@ export default function ShauryaLakshyaApp() {
   const [newAllowedEmail, setNewAllowedEmail] = useState('');
   const [importEmailsText, setImportEmailsText] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [expandedSlot, setExpandedSlot] = useState(null); 
+  const [expandedSlot, setExpandedSlot] = useState(null);
   const [editingScoreId, setEditingScoreId] = useState(null);
-  
+
   // Admin Slot Creation & Management State
   const [newSlotTime, setNewSlotTime] = useState('');
-  const [newSlotCapacity, setNewSlotCapacity] = useState(60);
-  const [newSlotDate, setNewSlotDate] = useState('5th Dec'); 
+  const [newSlotCapacity, setNewSlotCapacity] = useState(18);
+  const [newSlotDate, setNewSlotDate] = useState('26th September');
   const [newSlotCategory, setNewSlotCategory] = useState('Air Rifle');
-  const [adminViewDate, setAdminViewDate] = useState('5th Dec');
+  const [adminViewDate, setAdminViewDate] = useState('26th September');
   const [adminViewCategory, setAdminViewCategory] = useState('All');
   const [slotFeedback, setSlotFeedback] = useState(null);
 
@@ -175,18 +206,18 @@ export default function ShauryaLakshyaApp() {
   const [lbCategory, setLbCategory] = useState('Air Rifle');
 
   // Booking State
-  const [bookingStep, setBookingStep] = useState('verify'); 
+  const [bookingStep, setBookingStep] = useState('verify');
   const [participantEmail, setParticipantEmail] = useState('');
-  const [bookingForm, setBookingForm] = useState({ 
-    name: '', 
-    gender: 'General', 
-    cadetType: 'General', 
-    slotId: '' 
+  const [bookingForm, setBookingForm] = useState({
+    name: '',
+    gender: 'Male',
+    cadetType: 'General',
+    slotId: ''
   });
   const [bookingCategory, setBookingCategory] = useState('');
-  const [bookingDate, setBookingDate] = useState('5th Dec'); 
+  const [bookingDate, setBookingDate] = useState('26th September');
   const [showSuccessModal, setShowSuccessModal] = useState(false);
-  const [lastBookedTicket, setLastBookedTicket] = useState(null); 
+  const [lastBookedTicket, setLastBookedTicket] = useState(null);
   const [lastBookedPass, setLastBookedPass] = useState(null);
 
   // Participant Profile / Event Pass State
@@ -197,27 +228,25 @@ export default function ShauryaLakshyaApp() {
   // Admin QR Check-In State
   const [scannerRunning, setScannerRunning] = useState(false);
   const [cameraFacing, setCameraFacing] = useState('environment');
+  const [availableCameras, setAvailableCameras] = useState([]);
+  const [activeCameraId, setActiveCameraId] = useState(null);
   const [lookupQuery, setLookupQuery] = useState('');
   const [lookupResult, setLookupResult] = useState(null);
   const [checkInLoading, setCheckInLoading] = useState(false);
   const [checkInFeedback, setCheckInFeedback] = useState(null);
   const html5QrCodeRef = useRef(null);
   const qrFileInputRef = useRef(null);
+  const emailFileInputRef = useRef(null);
 
   // Carousel State
   const [currentSlide, setCurrentSlide] = useState(0);
 
-  // --- AUTH INIT & PERSISTENCE ---
+  // --- AUTH INIT & SECURE OAUTH VERIFICATION ---
   useEffect(() => {
-    const persistedAdmin = localStorage.getItem('shaurya_admin_session');
-    if (persistedAdmin === 'true') {
-      setIsAdminAuthenticated(true);
-    }
-
     const initAuth = async () => {
       try {
         if (!auth.currentUser) {
-           await signInAnonymously(auth);
+          await signInAnonymously(auth);
         }
       } catch (error) {
         console.warn("Auth initialization skipped (operating in local session mode)");
@@ -231,7 +260,14 @@ export default function ShauryaLakshyaApp() {
         if (!u.isAnonymous && u.email && ALLOWED_ADMIN_EMAILS.includes(u.email)) {
           setIsAdminAuthenticated(true);
           localStorage.setItem('shaurya_admin_session', 'true');
-        } 
+        } else {
+          setIsAdminAuthenticated(false);
+          localStorage.removeItem('shaurya_admin_session');
+        }
+      } else {
+        setUser(null);
+        setIsAdminAuthenticated(false);
+        localStorage.removeItem('shaurya_admin_session');
       }
     });
     return () => unsubscribeAuth();
@@ -239,20 +275,22 @@ export default function ShauryaLakshyaApp() {
 
   // --- FIRESTORE LISTENERS (NON-BLOCKING) ---
   useEffect(() => {
-    if (!user) return; 
+    if (!user) return;
     let unsub;
     try {
       const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'participants'));
       unsub = onSnapshot(q, (snapshot) => {
-        if (!snapshot.empty) {
-          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          setParticipants(data);
-          try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(data)); } catch (e) {}
-        }
+        const data = snapshot.docs.map(doc => {
+          const d = doc.data();
+          const cat = (d.category === 'Pistol' || d.category === 'Air Pistol') ? 'Air Pistol' : (d.category || 'Air Rifle');
+          return { id: doc.id, ...d, category: cat };
+        });
+        setParticipants(data);
+        try { localStorage.setItem('lakshya_participants_v6', JSON.stringify(data)); } catch (e) { }
       }, (err) => {
         console.warn("Participants Firestore listener info:", err);
       });
-    } catch (e) {}
+    } catch (e) { }
     return () => unsub && unsub();
   }, [user]);
 
@@ -262,22 +300,26 @@ export default function ShauryaLakshyaApp() {
     try {
       const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'slots'));
       unsub = onSnapshot(q, (snapshot) => {
-        if (!snapshot.empty) {
-          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          data.sort((a, b) => {
-            if (a.date !== b.date) return (a.date || '').localeCompare(b.date || '');
-            if (a.sortOrder !== undefined && b.sortOrder !== undefined) {
-              return a.sortOrder - b.sortOrder;
-            }
-            return (a.time || '').localeCompare(b.time || '');
-          });
-          setSlots(data);
-          try { localStorage.setItem('lakshya_slots_v4', JSON.stringify(data)); } catch (e) {}
-        }
+        const data = snapshot.docs.map(doc => {
+          const d = doc.data();
+          const category = (d.category === 'Pistol' || d.category === 'Air Pistol') ? 'Air Pistol' : (d.category || 'Air Rifle');
+          const disciplineCap = getDisciplineCapacity(category);
+          const capacity = (d.capacity === 60 || !d.capacity) ? disciplineCap : d.capacity;
+          return { id: doc.id, ...d, category, capacity };
+        });
+        data.sort((a, b) => {
+          if (a.date !== b.date) return (a.date || '').localeCompare(b.date || '');
+          if (a.sortOrder !== undefined && b.sortOrder !== undefined) {
+            return a.sortOrder - b.sortOrder;
+          }
+          return (a.time || '').localeCompare(b.time || '');
+        });
+        setSlots(data);
+        try { localStorage.setItem('lakshya_slots_v6', JSON.stringify(data)); } catch (e) { }
       }, (err) => {
         console.warn("Slots Firestore listener info:", err);
       });
-    } catch (e) {}
+    } catch (e) { }
     return () => unsub && unsub();
   }, [user]);
 
@@ -287,15 +329,13 @@ export default function ShauryaLakshyaApp() {
     try {
       const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'allowed_emails'));
       unsub = onSnapshot(q, (snapshot) => {
-        if (!snapshot.empty) {
-          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          setAllowedEmails(data);
-          try { localStorage.setItem('lakshya_emails_v4', JSON.stringify(data)); } catch (e) {}
-        }
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setAllowedEmails(data);
+        try { localStorage.setItem('lakshya_emails_v6', JSON.stringify(data)); } catch (e) { }
       }, (err) => {
         console.warn("Allowed emails sync info:", err);
       });
-    } catch (e) {}
+    } catch (e) { }
     return () => unsub && unsub();
   }, [user]);
 
@@ -324,14 +364,14 @@ export default function ShauryaLakshyaApp() {
     const handleScroll = () => {
       const currentScrollY = window.scrollY || window.pageYOffset || 0;
       const now = Date.now();
-      
+
       // Trigger ONLY when scrolling upward by more than 15px with a strict 1.6s cooldown
       // This prevents multiple repeated triggers (1 single clean animation per scroll up)
       if (currentScrollY < lastScrollYRef.current - 15 && (now - lastTriggerTimeRef.current > 1600)) {
         lastTriggerTimeRef.current = now;
         setHeroAnimKey(k => k + 1);
       }
-      
+
       lastScrollYRef.current = currentScrollY;
     };
 
@@ -343,10 +383,10 @@ export default function ShauryaLakshyaApp() {
   // --- SCORING & STATS LOGIC ---
   const calculateStats = (participantData) => {
     const scorecards = participantData.scorecards || [];
-    
+
     let grandTotal = 0;
     let grandPenalty = 0;
-    
+
     const scoreCounts = {};
     for (let i = 0; i <= 10; i++) scoreCounts[i] = 0;
 
@@ -369,18 +409,18 @@ export default function ShauryaLakshyaApp() {
       shots.forEach(s => {
         const val = parseFloat(s);
         if (!isNaN(val)) {
-            let bucket = Math.floor(val); 
-            if (bucket > 10) bucket = 10; 
-            if (bucket < 0) bucket = 0;
-            scoreCounts[bucket] = (scoreCounts[bucket] || 0) + 1;
+          let bucket = Math.floor(val);
+          if (bucket > 10) bucket = 10;
+          if (bucket < 0) bucket = 0;
+          scoreCounts[bucket] = (scoreCounts[bucket] || 0) + 1;
         }
       });
     });
 
-    return { 
-      totalScore: grandTotal, 
+    return {
+      totalScore: grandTotal,
       totalPenalty: grandPenalty,
-      scoreCounts 
+      scoreCounts
     };
   };
 
@@ -397,17 +437,24 @@ export default function ShauryaLakshyaApp() {
         localStorage.setItem('shaurya_admin_session', 'true');
         setView('admin');
       } else {
-        await signOut(auth); 
+        await signOut(auth);
         setAdminLoginError("ACCESS DENIED: This Google account is not authorized for command.");
         setIsAdminAuthenticated(false);
         localStorage.removeItem('shaurya_admin_session');
-        await signInAnonymously(auth); 
+        await signInAnonymously(auth);
       }
     } catch (error) {
       console.error("Login Error:", error);
-      if (error.code === 'auth/unauthorized-domain') setAdminLoginError("DOMAIN ERROR: Add domain to Firebase Console.");
-      else if (error.code === 'auth/popup-closed-by-user') setAdminLoginError("Login Cancelled.");
-      else setAdminLoginError("Authentication Failed: " + error.message);
+      const errMsg = (error.message || '').toLowerCase();
+      if (errMsg.includes('suspended') || errMsg.includes('permission-denied')) {
+        setAdminLoginError("API KEY SUSPENDED: Google Cloud suspended this API key. Unsuspend it in Google Cloud Console or generate a new Web API Key in Firebase Console -> Project Settings and add to .env.");
+      } else if (error.code === 'auth/unauthorized-domain') {
+        setAdminLoginError("DOMAIN ERROR: Add localhost to Firebase Console -> Authentication -> Settings -> Authorized domains.");
+      } else if (error.code === 'auth/popup-closed-by-user') {
+        setAdminLoginError("Login Cancelled by user.");
+      } else {
+        setAdminLoginError("Authentication Failed: " + error.message);
+      }
     }
   };
 
@@ -415,7 +462,7 @@ export default function ShauryaLakshyaApp() {
     await signOut(auth);
     setIsAdminAuthenticated(false);
     localStorage.removeItem('shaurya_admin_session');
-    await signInAnonymously(auth); 
+    await signInAnonymously(auth);
     setView('home');
     setParticipantEmail('');
     setBookingCategory('');
@@ -444,18 +491,17 @@ export default function ShauryaLakshyaApp() {
     if (found) {
       setBookingStep('form');
     } else {
-      // If not on whitelist, check if user wants demo access
-      const proceedDemo = window.confirm(`The email "${inputEmail}" is not in the official whitelist.\n\nWould you like to proceed in DEMO TESTING mode?`);
-      if (proceedDemo) {
-        setBookingStep('form');
-      }
+      alert(`ACCESS RESTRICTED: The email "${inputEmail}" is not on the authorized registration allowlist.\n\nPlease contact the NCC RVCE command team or event administrator to obtain booking clearance.`);
+      return;
     }
   };
 
   const handleBooking = async (e) => {
     e.preventDefault();
+    if (processingAction) return; // Prevent double-clicks
+
     if (!bookingCategory) {
-      alert("Please select a shooting category (Air Rifle or Pistol).");
+      alert("Please select whether you want to proceed with Air Rifle or Air Pistol shooting.");
       return;
     }
     if (!bookingForm.slotId) {
@@ -469,7 +515,7 @@ export default function ShauryaLakshyaApp() {
       return;
     }
 
-    // Client-side duplicate email check
+    // Client-side duplicate email check (fast pre-check)
     const existing = participants.find(p => (p.email || '').toLowerCase() === inputEmail);
     if (existing) {
       alert("Action Aborted: You have already booked a slot with this email.");
@@ -488,6 +534,8 @@ export default function ShauryaLakshyaApp() {
       return;
     }
 
+    setProcessingAction(true);
+
     const ticketBytes = new Uint8Array(4);
     if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
       crypto.getRandomValues(ticketBytes);
@@ -495,12 +543,15 @@ export default function ShauryaLakshyaApp() {
     const finalTicketId = "TKT-" + Array.from(ticketBytes).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase().substring(0, 6);
     const qrToken = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + '-' + Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, '0')).join(''));
 
+    // Use email-based ID so local state ID matches Firestore doc ID
+    const participantDocId = inputEmail.replace(/\//g, '__');
+
     const newParticipant = {
-      id: 'p_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      id: participantDocId,
       name: bookingForm.name,
-      gender: bookingForm.gender || 'General',
+      gender: bookingForm.gender || 'Male',
       cadetType: 'General',
-      category: bookingCategory,
+      category: (bookingCategory === 'Air Pistol' ? 'Pistol' : bookingCategory),
       email: inputEmail,
       slotId: bookingForm.slotId,
       slotTime: selectedSlot.time,
@@ -522,61 +573,87 @@ export default function ShauryaLakshyaApp() {
       registeredAt: new Date().toISOString()
     };
 
-    // 1. Immediately update local slots booked count
-    setSlots(prev => {
-      const updated = prev.map(s => s.id === bookingForm.slotId ? { ...s, booked: (s.booked || 0) + 1 } : s);
-      try { localStorage.setItem('lakshya_slots_v4', JSON.stringify(updated)); } catch (e) {}
-      return updated;
-    });
+    // Local participant representation (always with friendly discipline name)
+    const localParticipant = {
+      ...newParticipant,
+      category: (bookingCategory === 'Pistol' || bookingCategory === 'Air Pistol') ? 'Air Pistol' : 'Air Rifle'
+    };
 
-    // 2. Immediately update participants
-    setParticipants(prev => {
-      const updated = [...prev, newParticipant];
-      try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(updated)); } catch (e) {}
-      return updated;
-    });
-
-    // 3. Issue ticket pass & show modal
-    setLastBookedTicket(finalTicketId);
-    setLastBookedPass({
-      name: bookingForm.name,
-      gender: bookingForm.gender,
-      category: bookingCategory,
-      email: inputEmail,
-      slotId: bookingForm.slotId,
-      slotTime: selectedSlot.time,
-      slotDate: selectedSlot.date || bookingDate,
-      ticketId: finalTicketId,
-      qrToken: qrToken
-    });
-    setShowSuccessModal(true);
-    setBookingForm({ ...bookingForm, name: '', slotId: '', gender: 'General' });
-
-    // 4. Background firestore write attempt
+    // TRANSACTION-FIRST: Firestore atomic booking with strict capacity check
     try {
-      const participantDocId = inputEmail.replace(/\//g, '__');
       const participantRef = doc(db, 'artifacts', appId, 'public', 'data', 'participants', participantDocId);
       const slotRef = doc(db, 'artifacts', appId, 'public', 'data', 'slots', bookingForm.slotId);
-      
-      const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
-      Promise.race([
-        runTransaction(db, async (transaction) => {
-          transaction.set(participantRef, newParticipant);
-          transaction.update(slotRef, { booked: currentBooked + 1 });
-        }),
-        timeout
-      ]).catch(err => {
-        console.log("Firestore cloud booking sync skipped (local active):", err);
+
+      await runTransaction(db, async (transaction) => {
+        // 1. Read current slot state inside transaction (atomic snapshot)
+        const slotDoc = await transaction.get(slotRef);
+        if (!slotDoc.exists()) {
+          throw new Error("Slot no longer exists. Please select another slot.");
+        }
+
+        const slotData = slotDoc.data();
+        const serverBooked = slotData.booked || 0;
+        const serverCapacity = slotData.capacity || getDisciplineCapacity(bookingCategory);
+
+        // 2. Strict capacity check inside the transaction
+        if (serverBooked >= serverCapacity) {
+          throw new Error(`SLOT FULL: This time slot has reached its maximum capacity of ${serverCapacity}. Please choose another slot.`);
+        }
+
+        // 3. Check if participant already exists (server-side duplicate check)
+        const participantDoc = await transaction.get(participantRef);
+        if (participantDoc.exists()) {
+          throw new Error("You have already booked a slot with this email address.");
+        }
+
+        // 4. Atomically write participant AND increment slot booked count
+        transaction.set(participantRef, newParticipant);
+        transaction.update(slotRef, { booked: serverBooked + 1 });
       });
+
+      // SUCCESS: Transaction committed — now update local state to reflect
+      setSlots(prev => {
+        const updated = prev.map(s => s.id === bookingForm.slotId ? { ...s, booked: (s.booked || 0) + 1 } : s);
+        try { localStorage.setItem('lakshya_slots_v6', JSON.stringify(updated)); } catch (e) { }
+        return updated;
+      });
+
+      setParticipants(prev => {
+        const updated = [...prev.filter(p => p.id !== localParticipant.id), localParticipant];
+        try { localStorage.setItem('lakshya_participants_v6', JSON.stringify(updated)); } catch (e) { }
+        return updated;
+      });
+
+      // Issue ticket pass & show modal
+      setLastBookedTicket(finalTicketId);
+      setLastBookedPass({
+        name: bookingForm.name,
+        gender: bookingForm.gender || 'Male',
+        category: (bookingCategory === 'Pistol' || bookingCategory === 'Air Pistol') ? 'Air Pistol' : 'Air Rifle',
+        email: inputEmail,
+        slotId: bookingForm.slotId,
+        slotTime: selectedSlot.time,
+        slotDate: selectedSlot.date || bookingDate,
+        ticketId: finalTicketId,
+        qrToken: qrToken
+      });
+      setShowSuccessModal(true);
+      setBookingForm({ name: '', slotId: '', gender: 'Male', cadetType: 'General' });
+
     } catch (err) {
-      console.log("Firestore background booking error:", err);
+      console.error("Booking transaction failed:", err);
+      const errMsg = err.message || "Booking failed. Please try again.";
+      alert("BOOKING FAILED: " + errMsg);
+    } finally {
+      setProcessingAction(false);
     }
   };
+
 
   const closeSuccessModal = () => {
     setShowSuccessModal(false);
     setLastBookedPass(null);
-    setView('home'); 
+    setView('home');
     setBookingStep('verify');
     setParticipantEmail('');
     setBookingCategory('');
@@ -599,7 +676,7 @@ export default function ShauryaLakshyaApp() {
           totalScore: stats.totalScore
         };
       });
-      try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(updated)); } catch (e) {}
+      try { localStorage.setItem('lakshya_participants_v6', JSON.stringify(updated)); } catch (e) { }
       return updated;
     });
   };
@@ -624,7 +701,7 @@ export default function ShauryaLakshyaApp() {
           totalScore: stats.totalScore
         };
       });
-      try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(updated)); } catch (e) {}
+      try { localStorage.setItem('lakshya_participants_v6', JSON.stringify(updated)); } catch (e) { }
       return updated;
     });
   };
@@ -643,7 +720,7 @@ export default function ShauryaLakshyaApp() {
           totalScore: stats.totalScore
         };
       });
-      try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(updated)); } catch (e) {}
+      try { localStorage.setItem('lakshya_participants_v6', JSON.stringify(updated)); } catch (e) { }
       return updated;
     });
   };
@@ -652,74 +729,216 @@ export default function ShauryaLakshyaApp() {
     if (!participant) return;
     const target = participants.find(p => p.id === participant.id) || participant;
     const stats = calculateStats(target);
-    
+
     // Background cloud update
     try {
       updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', target.id), {
         scorecards: target.scorecards || [],
         totalScore: stats.totalScore
       }).catch(e => console.log("Score update saved in local session:", e));
-    } catch (e) {}
+    } catch (e) { }
 
     alert(`Official scores saved for ${target.name} (Total: ${stats.totalScore.toFixed(1)} PTS)!`);
     setEditingScoreId(null);
   };
 
-  const addAllowedEmail = (e) => {
+  const handleAddAllowedEmail = (e) => {
     e.preventDefault();
     if (!newAllowedEmail) return;
     const email = newAllowedEmail.trim();
     if (allowedEmails.some(e => (e.email || '').trim().toLowerCase() === email.toLowerCase())) {
       setNewAllowedEmail('');
-      return; 
+      return;
     }
     const newEntry = { id: 'email_' + Date.now(), email: email, addedAt: new Date().toISOString() };
     setAllowedEmails(prev => {
       const updated = [...prev, newEntry];
-      try { localStorage.setItem('lakshya_emails_v4', JSON.stringify(updated)); } catch (e) {}
+      try { localStorage.setItem('lakshya_emails_v6', JSON.stringify(updated)); } catch (e) { }
       return updated;
     });
     setNewAllowedEmail('');
     try {
       addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'allowed_emails'), {
         email: email, addedAt: new Date().toISOString()
-      }).catch(() => {});
-    } catch (e) {}
+      }).catch(() => { });
+    } catch (e) { }
   };
 
-  const handleBulkEmailImport = () => {
-    const emails = importEmailsText.split(/[\n,]+/).map(e => e.trim()).filter(e => e);
+  const handleBulkImportEmails = () => {
+    const emails = importEmailsText.split(/[\n,;]+/).map(e => e.trim()).filter(e => e && e.includes('@'));
     let count = 0;
     const toAdd = [];
     emails.forEach(email => {
       if (!allowedEmails.some(e => (e.email || '').trim().toLowerCase() === email.toLowerCase())) {
-        toAdd.push({ id: 'email_' + Date.now() + '_' + count, email: email, addedAt: new Date().toISOString() });
+        const entry = { id: 'email_' + Date.now() + '_' + count, email: email, addedAt: new Date().toISOString() };
+        toAdd.push(entry);
         count++;
       }
     });
     if (toAdd.length > 0) {
       setAllowedEmails(prev => {
         const updated = [...prev, ...toAdd];
-        try { localStorage.setItem('lakshya_emails_v4', JSON.stringify(updated)); } catch (e) {}
+        try { localStorage.setItem('lakshya_emails_v6', JSON.stringify(updated)); } catch (e) { }
         return updated;
       });
+      // Sync all new emails to Firestore
+      try {
+        toAdd.forEach(entry => {
+          addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'allowed_emails'), {
+            email: entry.email, addedAt: entry.addedAt
+          }).catch(() => { });
+        });
+      } catch (e) { }
     }
-    alert(`Imported ${count} emails.`);
+    alert(`Imported ${count} new email${count !== 1 ? 's' : ''}. ${emails.length - count} duplicate(s) skipped.`);
     setImportEmailsText('');
   };
 
-  const removeAllowedEmail = (id) => {
-    if(window.confirm("Revoke access?")) {
+  // Handle CSV/Excel file upload for bulk email import
+  const handleFileEmailImport = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    setProcessingAction(true);
+    try {
+      const fileName = file.name.toLowerCase();
+
+      if (fileName.endsWith('.csv') || fileName.endsWith('.txt')) {
+        // Parse CSV/TXT with native FileReader
+        const text = await file.text();
+        const lines = text.split(/[\n\r]+/).map(l => l.trim()).filter(l => l);
+
+        const extractedEmails = [];
+        lines.forEach(line => {
+          // Split by comma, semicolon, or tab to handle multi-column CSVs
+          const parts = line.split(/[,;\t]+/).map(p => p.trim().replace(/^["']|["']$/g, ''));
+          parts.forEach(part => {
+            // Check if this part looks like an email
+            if (part && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(part)) {
+              extractedEmails.push(part.toLowerCase());
+            }
+          });
+        });
+
+        // Deduplicate
+        const uniqueEmails = [...new Set(extractedEmails)];
+        if (uniqueEmails.length === 0) {
+          alert("No valid email addresses found in the file. Ensure emails are in a recognizable format.");
+          return;
+        }
+
+        // Use the same import logic
+        let count = 0;
+        const toAdd = [];
+        uniqueEmails.forEach(email => {
+          if (!allowedEmails.some(e => (e.email || '').trim().toLowerCase() === email)) {
+            const entry = { id: 'email_file_' + Date.now() + '_' + count, email: email, addedAt: new Date().toISOString() };
+            toAdd.push(entry);
+            count++;
+          }
+        });
+
+        if (toAdd.length > 0) {
+          setAllowedEmails(prev => {
+            const updated = [...prev, ...toAdd];
+            try { localStorage.setItem('lakshya_emails_v6', JSON.stringify(updated)); } catch (e) { }
+            return updated;
+          });
+          // Sync to Firestore
+          try {
+            toAdd.forEach(entry => {
+              addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'allowed_emails'), {
+                email: entry.email, addedAt: entry.addedAt
+              }).catch(() => { });
+            });
+          } catch (ex) { }
+        }
+
+        alert(`File imported: ${count} new email${count !== 1 ? 's' : ''} added. ${uniqueEmails.length - count} duplicate(s) skipped.`);
+
+      } else if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
+        // For Excel files, use SheetJS (xlsx) if available, otherwise fallback
+        try {
+          const XLSX = await import('xlsx');
+          const buffer = await file.arrayBuffer();
+          const workbook = XLSX.read(buffer, { type: 'array' });
+          const sheetName = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[sheetName];
+          const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+
+          const extractedEmails = [];
+          data.forEach(row => {
+            if (Array.isArray(row)) {
+              row.forEach(cell => {
+                const val = String(cell || '').trim().toLowerCase();
+                if (val && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) {
+                  extractedEmails.push(val);
+                }
+              });
+            }
+          });
+
+          const uniqueEmails = [...new Set(extractedEmails)];
+          if (uniqueEmails.length === 0) {
+            alert("No valid email addresses found in the Excel file.");
+            return;
+          }
+
+          let count = 0;
+          const toAdd = [];
+          uniqueEmails.forEach(email => {
+            if (!allowedEmails.some(e => (e.email || '').trim().toLowerCase() === email)) {
+              const entry = { id: 'email_xlsx_' + Date.now() + '_' + count, email: email, addedAt: new Date().toISOString() };
+              toAdd.push(entry);
+              count++;
+            }
+          });
+
+          if (toAdd.length > 0) {
+            setAllowedEmails(prev => {
+              const updated = [...prev, ...toAdd];
+              try { localStorage.setItem('lakshya_emails_v6', JSON.stringify(updated)); } catch (e) { }
+              return updated;
+            });
+            try {
+              toAdd.forEach(entry => {
+                addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'allowed_emails'), {
+                  email: entry.email, addedAt: entry.addedAt
+                }).catch(() => { });
+              });
+            } catch (ex) { }
+          }
+
+          alert(`Excel imported: ${count} new email${count !== 1 ? 's' : ''} added. ${uniqueEmails.length - count} duplicate(s) skipped.`);
+        } catch (xlsxErr) {
+          console.error("Excel parse error:", xlsxErr);
+          alert("Could not parse Excel file. Please install the 'xlsx' package (npm install xlsx) or use a CSV file instead.");
+        }
+      } else {
+        alert("Unsupported file type. Please upload a .csv, .txt, or .xlsx file.");
+      }
+    } catch (err) {
+      console.error("File import error:", err);
+      alert("Error reading file: " + (err.message || "Unknown error"));
+    } finally {
+      setProcessingAction(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleDeleteAllowedEmail = (id) => {
+    if (window.confirm("Revoke access?")) {
       setAllowedEmails(prev => {
         const updated = prev.filter(e => e.id !== id);
-        try { localStorage.setItem('lakshya_emails_v4', JSON.stringify(updated)); } catch (e) {}
+        try { localStorage.setItem('lakshya_emails_v6', JSON.stringify(updated)); } catch (e) { }
         return updated;
       });
       try {
-        deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'allowed_emails', id)).catch(() => {});
-      } catch (e) {}
+        deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'allowed_emails', id)).catch(() => { });
+      } catch (e) { }
     }
   };
+
 
   // --- ADMIN SLOT MANAGEMENT ---
   const formatSlotTimeString = (raw) => {
@@ -755,7 +974,7 @@ export default function ShauryaLakshyaApp() {
     }
 
     const sortOrderVal = getSlotSortOrder(formattedTime);
-    const capacityVal = parseInt(newSlotCapacity, 10) || 60;
+    const capacityVal = parseInt(newSlotCapacity, 10) || getDisciplineCapacity(newSlotCategory);
     const newSlotId = 'slot_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
 
     const newSlotData = {
@@ -775,7 +994,7 @@ export default function ShauryaLakshyaApp() {
         if (a.date !== b.date) return (a.date || '').localeCompare(b.date || '');
         return (a.sortOrder ?? 999) - (b.sortOrder ?? 999);
       });
-      try { localStorage.setItem('lakshya_slots_v4', JSON.stringify(updated)); } catch (e) {}
+      try { localStorage.setItem('lakshya_slots_v6', JSON.stringify(updated)); } catch (e) { }
       return updated;
     });
 
@@ -786,31 +1005,28 @@ export default function ShauryaLakshyaApp() {
     }
 
     setNewSlotTime('');
-    setSlotFeedback({ 
-      type: 'success', 
-      msg: `Slot ${formattedTime} (${newSlotCategory} · ${newSlotDate}) created successfully!` 
+    setSlotFeedback({
+      type: 'success',
+      msg: `Slot ${formattedTime} (${newSlotCategory} · ${newSlotDate} · Cap: ${capacityVal}) created successfully!`
     });
 
-    // 3. Background Firestore write with timeout (non-blocking)
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
-    Promise.race([
-      addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'slots'), newSlotData),
-      timeout
-    ]).catch(err => {
-      console.log("Firestore cloud sync skipped (local persistence active):", err);
-    });
+    // 3. Firestore write (BaaS persistence)
+    try {
+      setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'slots', newSlotId), newSlotData)
+        .catch(err => console.warn("Firestore slot write notice:", err));
+    } catch (e) { }
   };
 
-  const handleLoadStandardSchedule = () => {
+  const handleLoadStandardSchedule = async () => {
     let shouldClear = false;
     if (slots.length > 0) {
-      const choice = window.confirm("Slots already exist.\n\nClick OK to RESET & LOAD standard schedule for BOTH DAYS and BOTH DISCIPLINES (Air Rifle + Pistol).\nClick CANCEL to APPEND to current list.");
+      const choice = window.confirm("Slots already exist.\n\nClick OK to RESET & LOAD standard schedule for 26th & 27th September (Air Rifle: 18 slots/hr, Air Pistol: 6 slots/hr).\nClick CANCEL to APPEND to current list.");
       shouldClear = choice;
     }
-    
+
     setProcessingAction(true);
     const standardGenerated = generateDefaultSlots();
-    
+
     setSlots(prev => {
       let updated;
       if (shouldClear) {
@@ -824,57 +1040,67 @@ export default function ShauryaLakshyaApp() {
         if (a.date !== b.date) return (a.date || '').localeCompare(b.date || '');
         return (a.sortOrder ?? 999) - (b.sortOrder ?? 999);
       });
-      try { localStorage.setItem('lakshya_slots_v4', JSON.stringify(updated)); } catch (e) {}
+      try { localStorage.setItem('lakshya_slots_v6', JSON.stringify(updated)); } catch (e) { }
       return updated;
     });
 
-    setSlotFeedback({ type: 'success', msg: 'Standard 2-day schedule for Air Rifle & Pistol loaded!' });
+    // Push standard schedule to Cloud Firestore
+    try {
+      const pushPromises = standardGenerated.map(s =>
+        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'slots', s.id), s, { merge: true })
+      );
+      await Promise.allSettled(pushPromises);
+    } catch (e) {
+      console.warn("Could not batch sync slots to Cloud Firestore:", e);
+    }
+
+    setSlotFeedback({ type: 'success', msg: 'Standard 26th & 27th September schedule (18 Rifle, 6 Pistol) synced to local & Cloud Firestore!' });
     setProcessingAction(false);
   };
 
   const handleDeleteSlot = (slotId, currentBooked) => {
     if (currentBooked > 0) {
-      if(!window.confirm(`WARNING: This slot has ${currentBooked} candidates assigned. Deleting it will NOT remove the candidates. Continue?`)) return;
+      if (!window.confirm(`WARNING: This slot has ${currentBooked} candidates assigned. Deleting it will NOT remove the candidates. Continue?`)) return;
     } else {
-      if(!window.confirm("Are you sure you want to delete this slot?")) return;
+      if (!window.confirm("Are you sure you want to delete this slot?")) return;
     }
 
     setSlots(prev => {
       const updated = prev.filter(s => s.id !== slotId);
-      try { localStorage.setItem('lakshya_slots_v4', JSON.stringify(updated)); } catch (e) {}
+      try { localStorage.setItem('lakshya_slots_v6', JSON.stringify(updated)); } catch (e) { }
       return updated;
     });
     setSlotFeedback({ type: 'success', msg: 'Slot deleted successfully.' });
 
     // Background Firestore delete
-    deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'slots', slotId)).catch(() => {});
+    deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'slots', slotId)).catch(() => { });
   };
 
   const handleDeleteParticipant = (id, slotId) => {
-    if(!window.confirm("Discharge personnel?")) return;
-    
+    if (!window.confirm("Discharge personnel?")) return;
+
     setParticipants(prev => {
       const updated = prev.filter(p => p.id !== id);
-      try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(updated)); } catch (e) {}
+      try { localStorage.setItem('lakshya_participants_v6', JSON.stringify(updated)); } catch (e) { }
       return updated;
     });
 
     if (slotId && slotId !== 'pending') {
       setSlots(prev => {
         const updated = prev.map(s => s.id === slotId ? { ...s, booked: Math.max(0, (s.booked || 1) - 1) } : s);
-        try { localStorage.setItem('lakshya_slots_v4', JSON.stringify(updated)); } catch (e) {}
+        try { localStorage.setItem('lakshya_slots_v6', JSON.stringify(updated)); } catch (e) { }
         return updated;
       });
     }
 
     // Background Firestore cleanup
-    deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', id)).catch(() => {});
+    deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', id)).catch(() => { });
     if (slotId && slotId !== 'pending') {
       const slot = slots.find(s => s.id === slotId);
       if (slot) {
         updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'slots', slotId), {
           booked: Math.max(0, slot.booked - 1)
-        }).catch(() => {});
+        }).catch(() => { });
       }
     }
   };
@@ -934,51 +1160,135 @@ export default function ShauryaLakshyaApp() {
         osc.start();
         osc.stop(ctx.currentTime + 0.15);
       }
-    } catch (e) {}
+    } catch (e) { }
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
-      try { navigator.vibrate([100, 50, 100]); } catch (e) {}
+      try { navigator.vibrate([100, 50, 100]); } catch (e) { }
     }
   };
 
-  const startScanner = async (facing = cameraFacing) => {
-    setCheckInFeedback(null);
-    setLookupResult(null);
+  const stopScanner = async () => {
     try {
-      if (!html5QrCodeRef.current) {
-        html5QrCodeRef.current = new Html5Qrcode("admin-qr-reader");
+      if (html5QrCodeRef.current) {
+        if (html5QrCodeRef.current.isScanning) {
+          await html5QrCodeRef.current.stop();
+        }
+        await html5QrCodeRef.current.clear();
       }
-      if (html5QrCodeRef.current.isScanning) {
-        await html5QrCodeRef.current.stop();
-      }
-      await html5QrCodeRef.current.start(
-        { facingMode: facing },
-        { fps: 12, qrbox: { width: 230, height: 230 } },
-        (decodedText) => {
-          stopScanner();
-          triggerScanSuccessEffects();
-          handleVerifyToken(decodedText);
-        },
-        () => {}
-      );
-      setScannerRunning(true);
     } catch (err) {
-      console.error("Camera scanner start error:", err);
-      let msg = "Camera access failed: " + (err.message || "Permission denied.");
-      if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        msg = "Note: Live camera requires HTTPS or localhost on mobile. You can use '📷 Snap / Upload QR Photo' below or enter Ticket ID manually!";
-      }
-      setCheckInFeedback({ type: 'error', text: msg });
+      console.warn("Error stopping/clearing scanner:", err);
+    } finally {
+      html5QrCodeRef.current = null;
       setScannerRunning(false);
     }
   };
 
+  const startScanner = async (overrideFacingOrId = null) => {
+    setCheckInFeedback(null);
+    setLookupResult(null);
+
+    // Stop and clear any existing instance first
+    await stopScanner();
+
+    // Make sure scanner state is running immediately so DOM is visible with layout dimensions
+    setScannerRunning(true);
+
+    // Give browser time to layout container dimensions
+    await new Promise(resolve => setTimeout(resolve, 120));
+
+    const readerElem = document.getElementById("admin-qr-reader");
+    if (!readerElem) {
+      setCheckInFeedback({ type: 'error', text: "Camera scanner element not found in DOM." });
+      setScannerRunning(false);
+      return;
+    }
+
+    try {
+      const qrScanner = new Html5Qrcode("admin-qr-reader");
+      html5QrCodeRef.current = qrScanner;
+
+      // Camera selection strategy:
+      // By default on mobile devices, requesting { facingMode: "environment" } instructs the OS / browser
+      // to pick the primary high-resolution rear RGB camera (avoiding auxiliary depth/macro/ToF sensors).
+      let camConfig = { facingMode: "environment" };
+
+      if (overrideFacingOrId) {
+        if (overrideFacingOrId === 'user') {
+          camConfig = { facingMode: "user" };
+          setCameraFacing('user');
+        } else if (overrideFacingOrId === 'environment') {
+          camConfig = { facingMode: "environment" };
+          setCameraFacing('environment');
+        } else if (typeof overrideFacingOrId === 'string') {
+          camConfig = { deviceId: { exact: overrideFacingOrId } };
+          setActiveCameraId(overrideFacingOrId);
+        }
+      } else {
+        setCameraFacing('environment');
+      }
+
+      const qrboxCalc = (viewfinderWidth, viewfinderHeight) => {
+        const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+        const edge = Math.max(160, Math.min(Math.floor(minEdge * 0.72), 260));
+        return { width: edge, height: edge };
+      };
+
+      const scanConfig = {
+        fps: 15,
+        qrbox: qrboxCalc
+      };
+
+      const onScanSuccess = (decodedText) => {
+        stopScanner();
+        triggerScanSuccessEffects();
+        handleVerifyToken(decodedText);
+      };
+
+      try {
+        await qrScanner.start(camConfig, scanConfig, onScanSuccess, () => { });
+      } catch (firstErr) {
+        console.warn("Camera start with primary config failed, attempting fallback:", firstErr);
+        // If environment facing mode failed (e.g. desktop webcam without rear camera), try front camera
+        if (camConfig && camConfig.facingMode === 'environment') {
+          camConfig = { facingMode: "user" };
+          setCameraFacing('user');
+          await qrScanner.start(camConfig, scanConfig, onScanSuccess, () => { });
+        } else {
+          throw firstErr;
+        }
+      }
+
+      // Now that camera permissions are active, enumerate cameras to populate the switcher
+      try {
+        const devices = await Html5Qrcode.getCameras();
+        if (devices && devices.length > 0) {
+          setAvailableCameras(devices);
+        }
+      } catch (camErr) {
+        console.warn("Could not enumerate device cameras:", camErr);
+      }
+    } catch (err) {
+      console.error("Camera scanner start error:", err);
+      let msg = "Camera access failed: " + (err.message || "Permission denied.");
+      if (typeof window !== 'undefined' && window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        msg = "Note: Live camera requires HTTPS or localhost on mobile. You can use '📷 Snap / Upload QR Photo' below or enter Ticket ID manually!";
+      }
+      setCheckInFeedback({ type: 'error', text: msg });
+      await stopScanner();
+    }
+  };
+
   const toggleCameraFacing = async () => {
+    if (availableCameras.length > 1) {
+      const currIdx = availableCameras.findIndex(c => c.id === activeCameraId);
+      const nextIdx = (currIdx + 1) % availableCameras.length;
+      const nextCam = availableCameras[nextIdx];
+      setActiveCameraId(nextCam.id);
+      await startScanner(nextCam.id);
+      return;
+    }
     const nextFacing = cameraFacing === 'environment' ? 'user' : 'environment';
     setCameraFacing(nextFacing);
-    if (scannerRunning) {
-      await stopScanner();
-      await startScanner(nextFacing);
-    }
+    await startScanner(nextFacing);
   };
 
   const handleImageFileScan = async (e) => {
@@ -986,15 +1296,13 @@ export default function ShauryaLakshyaApp() {
     if (!file) return;
     setCheckInFeedback(null);
     setLookupResult(null);
+
+    await stopScanner();
+
     try {
-      if (!html5QrCodeRef.current) {
-        html5QrCodeRef.current = new Html5Qrcode("admin-qr-reader");
-      }
-      if (html5QrCodeRef.current.isScanning) {
-        await html5QrCodeRef.current.stop();
-        setScannerRunning(false);
-      }
-      const decodedText = await html5QrCodeRef.current.scanFile(file, true);
+      const qrScanner = new Html5Qrcode("admin-qr-reader");
+      const decodedText = await qrScanner.scanFile(file, true);
+      try { qrScanner.clear(); } catch (cErr) { }
       triggerScanSuccessEffects();
       handleVerifyToken(decodedText);
     } catch (err) {
@@ -1004,23 +1312,12 @@ export default function ShauryaLakshyaApp() {
     e.target.value = '';
   };
 
-  const stopScanner = async () => {
-    if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
-      try {
-        await html5QrCodeRef.current.stop();
-      } catch (err) {
-        console.error("Error stopping scanner:", err);
-      }
-    }
-    setScannerRunning(false);
-  };
-
   const handleVerifyToken = (rawQuery) => {
     const q = (rawQuery || '').trim();
     if (!q) return;
     setCheckInFeedback(null);
 
-    const match = participants.find(p => 
+    const match = participants.find(p =>
       (p.qrToken && p.qrToken.toLowerCase() === q.toLowerCase()) ||
       (p.ticketId && p.ticketId.toUpperCase() === q.toUpperCase()) ||
       (p.email && p.email.toLowerCase() === q.toLowerCase())
@@ -1070,7 +1367,7 @@ export default function ShauryaLakshyaApp() {
     // 1. Immediately update local state & persistence
     setParticipants(prev => {
       const updated = prev.map(p => p.id === participant.id ? updatedParticipant : p);
-      try { localStorage.setItem('lakshya_participants_v4', JSON.stringify(updated)); } catch (e) {}
+      try { localStorage.setItem('lakshya_participants_v6', JSON.stringify(updated)); } catch (e) { }
       return updated;
     });
 
@@ -1095,7 +1392,7 @@ export default function ShauryaLakshyaApp() {
       }).catch(err => {
         console.log("Firestore cloud check-in sync skipped (local active):", err);
       });
-    } catch (err) {}
+    } catch (err) { }
   };
 
   const resetCheckInState = () => {
@@ -1107,7 +1404,7 @@ export default function ShauryaLakshyaApp() {
   useEffect(() => {
     return () => {
       if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
-        html5QrCodeRef.current.stop().catch(() => {});
+        html5QrCodeRef.current.stop().catch(() => { });
       }
     };
   }, []);
@@ -1115,24 +1412,24 @@ export default function ShauryaLakshyaApp() {
   // --- RENDER HELPERS ---
   const sortedParticipants = useMemo(() => {
     return participants
-      .filter(p => 
+      .filter(p =>
         (p.name || '').toLowerCase().includes(searchTerm.toLowerCase()) &&
-        p.category === lbCategory
+        (p.category === lbCategory || (lbCategory === 'Air Pistol' && p.category === 'Pistol'))
       )
       .sort((a, b) => {
         const statsA = calculateStats(a);
         const statsB = calculateStats(b);
 
         if (Math.abs(statsB.totalScore - statsA.totalScore) > 0.001) {
-            return statsB.totalScore - statsA.totalScore;
+          return statsB.totalScore - statsA.totalScore;
         }
-        
+
         for (let i = 10; i >= 0; i--) {
-            const countA = statsA.scoreCounts[i] || 0;
-            const countB = statsB.scoreCounts[i] || 0;
-            if (countB !== countA) {
-                return countB - countA;
-            }
+          const countA = statsA.scoreCounts[i] || 0;
+          const countB = statsB.scoreCounts[i] || 0;
+          if (countB !== countA) {
+            return countB - countA;
+          }
         }
         return 0;
       });
@@ -1142,8 +1439,8 @@ export default function ShauryaLakshyaApp() {
   const activeParticipant = useMemo(() => {
     const q = (activeProfileQuery || participantEmail || (lastBookedPass && lastBookedPass.ticketId) || '').trim().toLowerCase();
     if (!q) return null;
-    return participants.find(p => 
-      (p.email && p.email.toLowerCase() === q) || 
+    return participants.find(p =>
+      (p.email && p.email.toLowerCase() === q) ||
       (p.ticketId && p.ticketId.toLowerCase() === q) ||
       (p.qrToken && p.qrToken.toLowerCase() === q)
     ) || null;
@@ -1151,10 +1448,14 @@ export default function ShauryaLakshyaApp() {
 
   const activeParticipantRank = useMemo(() => {
     if (!activeParticipant || !activeParticipant.category) return null;
-    
+    const targetCat = (activeParticipant.category === 'Pistol' || activeParticipant.category === 'Air Pistol') ? 'Air Pistol' : (activeParticipant.category || 'Air Rifle');
+
     // Filter candidates in same category (exact match with leaderboard logic)
     const pool = participants
-      .filter(p => p.category === activeParticipant.category)
+      .filter(p => {
+        const pCat = (p.category === 'Pistol' || p.category === 'Air Pistol') ? 'Air Pistol' : (p.category || 'Air Rifle');
+        return pCat === targetCat;
+      })
       .sort((a, b) => {
         const statsA = calculateStats(a);
         const statsB = calculateStats(b);
@@ -1162,7 +1463,7 @@ export default function ShauryaLakshyaApp() {
         if (Math.abs(statsB.totalScore - statsA.totalScore) > 0.001) {
           return statsB.totalScore - statsA.totalScore;
         }
-        
+
         for (let i = 10; i >= 0; i--) {
           const countA = statsA.scoreCounts[i] || 0;
           const countB = statsB.scoreCounts[i] || 0;
@@ -1188,7 +1489,7 @@ export default function ShauryaLakshyaApp() {
 
   const hasActiveScores = useMemo(() => {
     if (!activeParticipant || !activeParticipant.scorecards) return false;
-    return activeParticipant.scorecards.some(card => 
+    return activeParticipant.scorecards.some(card =>
       !card.isDQ && card.scores && card.scores.some(s => s !== '' && !isNaN(parseFloat(s)))
     );
   }, [activeParticipant]);
@@ -1198,8 +1499,8 @@ export default function ShauryaLakshyaApp() {
     setProfileSearchError('');
     const q = profileQuery.trim();
     if (!q) return;
-    const found = participants.find(p => 
-      (p.email && p.email.toLowerCase() === q.toLowerCase()) || 
+    const found = participants.find(p =>
+      (p.email && p.email.toLowerCase() === q.toLowerCase()) ||
       (p.ticketId && p.ticketId.toUpperCase() === q.toUpperCase()) ||
       (p.qrToken && p.qrToken.toLowerCase() === q.toLowerCase())
     );
@@ -1211,14 +1512,20 @@ export default function ShauryaLakshyaApp() {
     }
   };
 
-  const bookingSlots = slots.filter(s => s.date === bookingDate && bookingCategory && s.category === bookingCategory);
+  const bookingSlots = slots.filter(s =>
+    s.date === bookingDate &&
+    bookingCategory &&
+    (s.category === bookingCategory || (bookingCategory === 'Air Pistol' && s.category === 'Pistol'))
+  );
   const adminSlots = slots.filter(s => {
     const matchDate = s.date === adminViewDate;
-    const matchCat = adminViewCategory === 'All' || s.category === adminViewCategory;
+    const matchCat = adminViewCategory === 'All' ||
+      s.category === adminViewCategory ||
+      (adminViewCategory === 'Air Pistol' && s.category === 'Pistol');
     return matchDate && matchCat;
   });
 
-return (
+  return (
     <div className="min-h-screen bg-stone-900 text-amber-100 font-sans uppercase tracking-wider selection:bg-amber-700 selection:text-amber-100 relative flex flex-col">
       {/* Camo BG */}
       <div className="fixed inset-0 z-0 opacity-10 mix-blend-overlay pointer-events-none" style={{
@@ -1236,65 +1543,75 @@ return (
               </div>
               <div className="border-l-2 border-amber-700/60 h-10 mx-2 hidden md:block"></div>
               <div className="hidden md:flex flex-col">
-                <span className="font-black text-xl md:text-2xl tracking-widest text-amber-500 drop-shadow-sm">LAKSHYA</span>
+                <span className="font-black text-xl md:text-2xl tracking-widest text-amber-500 drop-shadow-sm">LAKSHYA 2.0</span>
                 <span className="text-[10px] text-amber-200/60 tracking-widest font-mono uppercase">10m Precision Shooting · RVCE</span>
               </div>
             </div>
-            
+
             <div className="hidden md:flex items-center space-x-2">
-              <button 
-                onClick={() => setView('home')} 
+              <button
+                onClick={() => setView('home')}
                 className={`px-4 py-2 rounded text-xs font-bold tracking-wider uppercase border transition-all ${view === 'home' ? 'border-amber-500 bg-amber-500/15 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.2)]' : 'border-transparent text-stone-400 hover:text-amber-200 hover:bg-stone-800'}`}>
                 Event Info
               </button>
-              <button 
-                onClick={() => setView('booking')} 
+              <button
+                onClick={() => setView('booking')}
                 className={`px-4 py-2 rounded text-xs font-bold tracking-wider uppercase border transition-all ${view === 'booking' ? 'border-amber-500 bg-amber-500/15 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.2)]' : 'border-transparent text-stone-400 hover:text-amber-200 hover:bg-stone-800'}`}>
                 Slot Selection
               </button>
-              <button 
-                onClick={() => setView('profile')} 
+              <button
+                onClick={() => setView('profile')}
                 className={`px-4 py-2 rounded text-xs font-bold tracking-wider uppercase border transition-all ${view === 'profile' ? 'border-amber-500 bg-amber-500/15 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.2)]' : 'border-transparent text-stone-400 hover:text-amber-200 hover:bg-stone-800'}`}>
                 Event Pass
               </button>
-              <button 
-                onClick={() => setView('leaderboard')} 
+              <button
+                onClick={() => setView('leaderboard')}
                 className={`px-4 py-2 rounded text-xs font-bold tracking-wider uppercase border transition-all ${view === 'leaderboard' ? 'border-amber-500 bg-amber-500/15 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.2)]' : 'border-transparent text-stone-400 hover:text-amber-200 hover:bg-stone-800'}`}>
                 Leaderboard
               </button>
-              <button 
-                onClick={() => setView(isAdminAuthenticated ? 'admin' : 'login')} 
-                className={`px-4 py-2 rounded text-xs font-bold tracking-wider uppercase border transition-all ${view === 'admin' || view === 'login' ? 'border-red-500 bg-red-950/40 text-red-400 shadow-[0_0_12px_rgba(239,68,68,0.2)]' : 'border-stone-700 text-stone-400 hover:text-red-400 hover:border-red-900/80 hover:bg-stone-800'}`}>
-                {isAdminAuthenticated ? 'Admin Panel' : 'Admin Login'}
-              </button>
+              {isAdminAuthenticated ? (
+                <button
+                  onClick={() => setView('admin')}
+                  className={`px-4 py-2 rounded text-xs font-bold tracking-wider uppercase border transition-all ${view === 'admin' ? 'border-red-500 bg-red-600 text-white shadow-[0_0_15px_rgba(239,68,68,0.5)]' : 'border-red-900 bg-red-950/40 text-red-400 hover:bg-red-900/60'}`}>
+                  Command Desk
+                </button>
+              ) : (
+                <button
+                  onClick={() => setView('login')}
+                  className={`px-3 py-2 rounded text-xs font-bold tracking-wider uppercase border transition-all ${view === 'login' ? 'border-amber-500 bg-amber-500/20 text-amber-300' : 'border-stone-700 text-stone-400 hover:text-amber-300'}`}>
+                  <Lock size={14} className="inline mr-1" /> Admin
+                </button>
+              )}
             </div>
-            
+
             {/* Mobile Menu Button */}
             <div className="md:hidden flex items-center">
-              <button 
-                onClick={() => setMenuOpen(!menuOpen)} 
+              <button
+                onClick={() => setMenuOpen(!menuOpen)}
                 aria-label="Toggle navigation menu"
-                className="text-amber-400 hover:text-amber-100 p-2.5 border border-amber-700/60 bg-stone-800/90 rounded transition active:scale-95">
-                {menuOpen ? <X size={22} /> : <Menu size={22} />}
+                className="text-amber-400 hover:text-amber-300 p-2">
+                {menuOpen ? <X size={28} /> : <Menu size={28} />}
               </button>
             </div>
           </div>
         </div>
         {menuOpen && (
-          <div className="md:hidden bg-stone-900/95 backdrop-blur-md border-b-2 border-amber-700/80 px-4 py-3 space-y-2 shadow-2xl animate-in fade-in">
-             <button onClick={() => {setView('home'); setMenuOpen(false)}} className={`block w-full text-left px-4 py-3 rounded text-xs font-bold uppercase tracking-wider transition ${view === 'home' ? 'bg-amber-500/20 text-amber-400 border-l-4 border-amber-500' : 'text-stone-300 hover:bg-stone-800'}`}>Event Info</button>
-             <button onClick={() => {setView('booking'); setMenuOpen(false)}} className={`block w-full text-left px-4 py-3 rounded text-xs font-bold uppercase tracking-wider transition ${view === 'booking' ? 'bg-amber-500/20 text-amber-400 border-l-4 border-amber-500' : 'text-stone-300 hover:bg-stone-800'}`}>Slot Selection</button>
-             <button onClick={() => {setView('profile'); setMenuOpen(false)}} className={`block w-full text-left px-4 py-3 rounded text-xs font-bold uppercase tracking-wider transition ${view === 'profile' ? 'bg-amber-500/20 text-amber-400 border-l-4 border-amber-500' : 'text-stone-300 hover:bg-stone-800'}`}>Event Pass</button>
-             <button onClick={() => {setView('leaderboard'); setMenuOpen(false)}} className={`block w-full text-left px-4 py-3 rounded text-xs font-bold uppercase tracking-wider transition ${view === 'leaderboard' ? 'bg-amber-500/20 text-amber-400 border-l-4 border-amber-500' : 'text-stone-300 hover:bg-stone-800'}`}>Leaderboard</button>
-             <button onClick={() => {setView(isAdminAuthenticated ? 'admin' : 'login'); setMenuOpen(false)}} className={`block w-full text-left px-4 py-3 rounded text-xs font-bold uppercase tracking-wider transition ${view === 'admin' || view === 'login' ? 'bg-red-950/40 text-red-400 border-l-4 border-red-500' : 'text-red-400 hover:bg-stone-800'}`}>
-               {isAdminAuthenticated ? 'Admin Panel' : 'Admin Login'}
-             </button>
+          <div className="md:hidden bg-stone-950 border-b-2 border-amber-700/80 px-4 pt-2 pb-6 space-y-3">
+            <button onClick={() => { setView('home'); setMenuOpen(false) }} className={`block w-full text-left py-2 px-3 text-sm font-bold ${view === 'home' ? 'text-amber-400 bg-stone-900' : 'text-stone-300'}`}>Event Info</button>
+            <button onClick={() => { setView('booking'); setMenuOpen(false) }} className={`block w-full text-left py-2 px-3 text-sm font-bold ${view === 'booking' ? 'text-amber-400 bg-stone-900' : 'text-stone-300'}`}>Slot Selection</button>
+            <button onClick={() => { setView('profile'); setMenuOpen(false) }} className={`block w-full text-left py-2 px-3 text-sm font-bold ${view === 'profile' ? 'text-amber-400 bg-stone-900' : 'text-stone-300'}`}>Event Pass</button>
+            <button onClick={() => { setView('leaderboard'); setMenuOpen(false) }} className={`block w-full text-left py-2 px-3 text-sm font-bold ${view === 'leaderboard' ? 'text-amber-400 bg-stone-900' : 'text-stone-300'}`}>Leaderboard</button>
+            {isAdminAuthenticated ? (
+              <button onClick={() => { setView('admin'); setMenuOpen(false) }} className="block w-full text-left py-2 px-3 text-sm font-bold text-red-400 bg-red-950/40">Command Desk</button>
+            ) : (
+              <button onClick={() => { setView('login'); setMenuOpen(false) }} className="block w-full text-left py-2 px-3 text-sm font-bold text-stone-400">Admin Login</button>
+            )}
           </div>
         )}
       </nav>
 
       <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 relative z-10 w-full">
-        
+
         {/* ERROR BANNER IF DB FAILS */}
         {dbError && isAdminAuthenticated && (
           <div className="mb-6 bg-red-900/80 border-l-4 border-red-500 p-4 rounded shadow-lg flex items-start gap-3">
@@ -1314,44 +1631,46 @@ return (
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-10 pointer-events-none">
                 <Crosshair size={380} className="text-amber-700" />
               </div>
-              
+
               {/* TITLE & BULLET CONTAINER - LOCKED 1:1 TO TEXT BOUNDS */}
-              <div 
-                key={heroAnimKey} 
+              <div
+                key={heroAnimKey}
                 onClick={() => setHeroAnimKey(k => k + 1)}
                 className="relative inline-flex items-center justify-center w-fit max-w-full mx-auto px-4 py-6 sm:py-10 select-none cursor-pointer group"
                 title="Click to trigger bullet ballistic trajectory"
               >
-                
+
                 {/* LAYER 1: Background Ghost / Concealed Title */}
                 <h1 className="text-2xl sm:text-4xl md:text-5xl lg:text-6xl xl:text-7xl font-black tracking-tight text-stone-800/40 whitespace-nowrap">
-                  LAKSHYA
+                  LAKSHYA 2.0
                 </h1>
 
                 {/* LAYER 2: Foreground Revealed Title (Animated with CSS Keyframes) */}
-                <h1 
+                <h1
                   className="animate-title-reveal text-2xl sm:text-4xl md:text-5xl lg:text-6xl xl:text-7xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-amber-100 via-amber-300 to-amber-600 drop-shadow-[0_5px_12px_rgba(0,0,0,0.9)] absolute inset-0 flex items-center justify-center whitespace-nowrap"
                 >
-                  LAKSHYA
+                  LAKSHYA 2.0
                 </h1>
 
                 {/* LAYER 3: Glowing Bullet Projectile Tracer (Animated with CSS Keyframes) */}
                 <div
-                  className="animate-bullet-shoot absolute top-1/2 -translate-y-1/2 pointer-events-none z-30"
+                  className="animate-bullet-shoot absolute top-1/2 pointer-events-none z-30"
                 >
                   {/* Glowing Bullet Projectile with tip anchored at left percentage */}
                   <div className="relative flex items-center -translate-x-full">
+                    {/* Supersonic shockwave ring */}
+                    <div className="w-1.5 h-4 -mr-1 rounded-full border border-amber-300/40 opacity-70 blur-[0.5px]"></div>
                     {/* High-speed glowing tracer tail */}
-                    <div 
-                      className="h-[3px] rounded-l-full" 
+                    <div
+                      className="h-[3px] rounded-l-full shadow-[0_0_8px_rgba(245,158,11,0.8)]"
                       style={{
-                        width: '56px',
-                        background: 'linear-gradient(to left, rgba(254, 240, 138, 0.95), rgba(245, 158, 11, 0.7), rgba(220, 38, 38, 0.3), transparent)'
+                        width: '64px',
+                        background: 'linear-gradient(to left, rgba(254, 240, 138, 0.98), rgba(245, 158, 11, 0.8), rgba(239, 68, 68, 0.3), transparent)'
                       }}
                     />
-                    {/* Projectile Core */}
-                    <div 
-                      className="w-3 h-2 rounded-r-full bg-amber-100 shadow-[0_0_14px_4px_rgba(251,191,36,0.9),0_0_24px_8px_rgba(245,158,11,0.6)]"
+                    {/* Brass / Copper Projectile Core */}
+                    <div
+                      className="w-4 h-2.5 rounded-r-full bg-gradient-to-r from-amber-200 via-amber-100 to-white shadow-[0_0_16px_4px_rgba(251,191,36,0.95),0_0_28px_8px_rgba(245,158,11,0.7)]"
                     />
                   </div>
                 </div>
@@ -1360,23 +1679,23 @@ return (
 
               {/* PRIMARY CTA BUTTONS - IN FIRST SCREEN HERO */}
               <div className="mt-6 sm:mt-8 relative z-30 flex flex-wrap justify-center gap-4 px-4">
-                <button 
-                  onClick={() => setView('booking')} 
+                <button
+                  onClick={() => setView('booking')}
                   className="bg-amber-600 hover:bg-amber-500 text-stone-950 font-black px-8 py-3.5 rounded-sm transition shadow-lg shadow-amber-900/40 tracking-widest border border-amber-400 text-sm"
                 >
                   REGISTER & BOOK SLOT
                 </button>
-                <button 
-                  onClick={() => setView('profile')} 
+                <button
+                  onClick={() => setView('profile')}
                   className="bg-stone-800 hover:bg-stone-700 text-amber-300 font-bold px-6 py-3.5 rounded-sm transition border border-amber-700/60 flex items-center gap-2 text-sm tracking-wider"
                 >
-                  <Ticket size={16}/> RETRIEVE PASS
+                  <Ticket size={16} /> RETRIEVE PASS
                 </button>
-                <button 
-                  onClick={() => setView('leaderboard')} 
+                <button
+                  onClick={() => setView('leaderboard')}
                   className="bg-stone-900 hover:bg-stone-800 text-amber-400 font-bold px-6 py-3.5 rounded-sm transition border border-stone-700 flex items-center gap-2 text-sm tracking-wider"
                 >
-                  <Trophy size={16}/> LIVE SCORES
+                  <Trophy size={16} /> LIVE SCORES
                 </button>
               </div>
             </div>
@@ -1390,8 +1709,8 @@ return (
 
               <div className="relative max-w-4xl mx-auto rounded-sm overflow-hidden border-2 border-amber-700/50 shadow-2xl bg-stone-950">
                 <div className="aspect-[16/9] md:aspect-[21/9] relative overflow-hidden flex items-center justify-center">
-                  <img 
-                    src={WEAPON_IMAGES[currentSlide].src} 
+                  <img
+                    src={WEAPON_IMAGES[currentSlide].src}
                     alt={WEAPON_IMAGES[currentSlide].title}
                     className="w-full h-full object-cover transition-all duration-700 scale-100 hover:scale-105"
                   />
@@ -1408,23 +1727,23 @@ return (
                   </div>
                 </div>
 
-                <button 
+                <button
                   onClick={prevSlide}
                   aria-label="Previous Weapon"
                   className="absolute left-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/60 hover:bg-black/90 text-amber-400 border border-amber-700/50 transition">
-                  <ChevronLeft size={20}/>
+                  <ChevronLeft size={20} />
                 </button>
-                <button 
+                <button
                   onClick={nextSlide}
                   aria-label="Next Weapon"
                   className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/60 hover:bg-black/90 text-amber-400 border border-amber-700/50 transition">
-                  <ChevronRight size={20}/>
+                  <ChevronRight size={20} />
                 </button>
 
                 <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
                   {WEAPON_IMAGES.map((_, idx) => (
-                    <button 
-                      key={idx} 
+                    <button
+                      key={idx}
                       onClick={() => setCurrentSlide(idx)}
                       aria-label={`Go to slide ${idx + 1}`}
                       className={`h-1.5 rounded-full transition-all ${idx === currentSlide ? 'bg-amber-400 w-6' : 'bg-stone-600 w-2'}`}
@@ -1457,49 +1776,35 @@ return (
                 <span>Select & Confirm</span>
               </div>
             </div>
-            
+
             <div className="bg-stone-800/90 rounded-sm p-6 sm:p-8 border-2 border-amber-700 shadow-2xl">
-              
+
               {/* Step 1: Verify Email */}
               {bookingStep === 'verify' && (
                 <form onSubmit={verifyParticipantEmail} className="space-y-6">
-                   <div className="text-center text-amber-200/70 mb-6">
-                     <div className="w-16 h-16 bg-amber-950/40 rounded-full flex items-center justify-center mx-auto mb-4 border border-amber-600/40">
-                       <Shield size={36} className="text-amber-500"/>
-                     </div>
-                     <h3 className="text-lg font-black text-amber-100 uppercase tracking-wide">Restricted Access Clearance</h3>
-                     <p className="text-xs text-stone-400 mt-1 max-w-md mx-auto">
-                       Enter your approved email ID to unlock category and duty slot reservations.
-                     </p>
-                   </div>
-                   <div>
-                      <label className="block text-xs font-bold text-amber-200/80 uppercase mb-2">Candidate Email Address</label>
-                      <input 
-                        required
-                        type="email" 
-                        className="w-full bg-stone-900 border-2 border-amber-700/50 rounded-sm px-4 py-3.5 text-amber-100 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none font-mono text-sm"
-                        placeholder="candidate@email.com"
-                        value={participantEmail}
-                        onChange={e => setParticipantEmail(e.target.value)}
-                      />
-                   </div>
-                   <button className="w-full bg-amber-700 hover:bg-amber-600 text-amber-100 font-bold py-4 rounded-sm transition border-2 border-amber-600 shadow-lg uppercase tracking-widest text-sm flex items-center justify-center gap-2">
-                     <Key size={16}/> VERIFY ACCESS & PROCEED
-                   </button>
-
-                   <div className="pt-2 text-center">
-                     <button
-                       type="button"
-                       onClick={() => {
-                         const randomNum = Math.floor(100 + Math.random() * 900);
-                         setParticipantEmail(`cadet_${randomNum}@rvce.edu.in`);
-                         setBookingStep('form');
-                       }}
-                       className="w-full bg-stone-900 hover:bg-stone-750 text-amber-400 hover:text-amber-300 font-bold py-2.5 rounded-sm border border-amber-600/40 transition text-xs flex items-center justify-center gap-2"
-                     >
-                       <Key size={13}/> ⚡ 1-Click Instant Demo Access (No Whitelist Needed)
-                     </button>
-                   </div>
+                  <div className="text-center text-amber-200/70 mb-6">
+                    <div className="w-16 h-16 bg-amber-950/40 rounded-full flex items-center justify-center mx-auto mb-4 border border-amber-600/40">
+                      <Shield size={36} className="text-amber-500" />
+                    </div>
+                    <h3 className="text-lg font-black text-amber-100 uppercase tracking-wide">Restricted Access Clearance</h3>
+                    <p className="text-xs text-stone-400 mt-1 max-w-md mx-auto">
+                      Enter your approved email ID to unlock category and duty slot reservations.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-amber-200/80 uppercase mb-2">Candidate Email Address</label>
+                    <input
+                      required
+                      type="email"
+                      className="w-full bg-stone-900 border-2 border-amber-700/50 rounded-sm px-4 py-3.5 text-amber-100 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none font-mono text-sm"
+                      placeholder="candidate@email.com"
+                      value={participantEmail}
+                      onChange={e => setParticipantEmail(e.target.value)}
+                    />
+                  </div>
+                  <button className="w-full bg-amber-700 hover:bg-amber-600 text-amber-100 font-bold py-4 rounded-sm transition border-2 border-amber-600 shadow-lg uppercase tracking-widest text-sm flex items-center justify-center gap-2">
+                    <Key size={16} /> VERIFY ACCESS & PROCEED
+                  </button>
                 </form>
               )}
 
@@ -1508,97 +1813,167 @@ return (
                 <form onSubmit={handleBooking} className="space-y-6">
                   <div className="flex items-center justify-between text-green-400 text-xs font-bold bg-green-950/40 border border-green-600/50 p-3 rounded">
                     <div className="flex items-center gap-2">
-                      <CheckCircle size={16} className="text-green-500"/> 
+                      <CheckCircle size={16} className="text-green-500" />
                       <span>Access Granted: <span className="font-mono text-amber-200">{participantEmail}</span></span>
                     </div>
-                    <button 
-                      type="button" 
-                      onClick={() => setBookingStep('verify')} 
+                    <button
+                      type="button"
+                      onClick={() => setBookingStep('verify')}
                       className="text-[10px] text-stone-400 hover:text-amber-300 underline font-normal"
                     >
                       Change
                     </button>
                   </div>
 
-                  {/* 1. DATE SELECTION */}
-                  <div>
-                    <label className="block text-xs font-bold text-amber-200/80 uppercase mb-2">1. Select Mission Date</label>
-                    <div className="grid grid-cols-2 gap-2 bg-stone-900 p-1.5 rounded-sm border border-amber-700/50">
-                      {EVENT_DATES.map(date => (
-                        <button
-                          key={date}
-                          type="button"
-                          onClick={() => { setBookingDate(date); setBookingForm({...bookingForm, slotId: ''}); }}
-                          className={`py-2.5 text-xs font-bold rounded-sm transition uppercase tracking-wider flex items-center justify-center gap-2 ${bookingDate === date ? 'bg-amber-700 text-white shadow' : 'text-stone-400 hover:text-amber-100'}`}
-                        >
-                          <Calendar size={14}/> {date}
-                        </button>
-                      ))}
+                  {/* 1. BASIC CANDIDATE DETAILS & MISSION DATE */}
+                  <div className="bg-stone-900/90 p-5 rounded-sm border border-amber-700/40 space-y-4">
+                    <div className="flex items-center justify-between border-b border-amber-800/40 pb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-amber-600 text-stone-950 font-black text-xs flex items-center justify-center">1</span>
+                        <h4 className="text-xs font-bold text-amber-200 uppercase tracking-wider">Candidate Details & Mission Date</h4>
+                      </div>
+                      <span className="text-[10px] text-amber-400 font-mono">STEP 1 OF 3</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-amber-200/80 uppercase mb-2">Candidate Full Name *</label>
+                        <input
+                          required
+                          type="text"
+                          placeholder="Cadet Full Name"
+                          className="w-full bg-stone-950 border-2 border-amber-700/50 rounded-sm px-4 py-3 text-amber-100 outline-none focus:border-amber-500 text-sm"
+                          value={bookingForm.name}
+                          onChange={e => setBookingForm({ ...bookingForm, name: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-amber-200/80 uppercase mb-2">Gender Category *</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {['Male', 'Female'].map(g => {
+                            const isGSelected = (bookingForm.gender || 'Male') === g;
+                            return (
+                              <button
+                                key={g}
+                                type="button"
+                                onClick={() => setBookingForm({ ...bookingForm, gender: g })}
+                                className={`py-3 text-xs font-bold rounded-sm border-2 transition uppercase tracking-wider ${isGSelected ? 'border-amber-500 bg-amber-950/60 text-amber-200 shadow' : 'border-stone-700 bg-stone-950 text-stone-400 hover:border-amber-700/50'}`}
+                              >
+                                {g}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-amber-200/80 uppercase mb-2">Select Mission Date *</label>
+                      <div className="grid grid-cols-2 gap-2 bg-stone-950 p-1.5 rounded-sm border border-amber-700/50">
+                        {EVENT_DATES.map(date => (
+                          <button
+                            key={date}
+                            type="button"
+                            onClick={() => { setBookingDate(date); setBookingForm({ ...bookingForm, slotId: '' }); }}
+                            className={`py-2.5 text-xs font-bold rounded-sm transition uppercase tracking-wider flex items-center justify-center gap-2 ${bookingDate === date ? 'bg-amber-700 text-white shadow' : 'text-stone-400 hover:text-amber-100'}`}
+                          >
+                            <Calendar size={14} /> {date}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
 
-                  {/* 2. SHOOTING CATEGORY SELECTION */}
-                  <div>
-                    <label className="block text-xs font-bold text-amber-200/80 uppercase mb-2">2. Shooting Discipline & Category</label>
-                    <div className="grid grid-cols-2 gap-3">
+                  {/* 2. SHOOTING DISCIPLINE SELECTION (Air Rifle vs Air Pistol) */}
+                  <div className="bg-stone-900/90 p-5 rounded-sm border border-amber-700/40 space-y-4">
+                    <div className="flex items-center justify-between border-b border-amber-800/40 pb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-amber-600 text-stone-950 font-black text-xs flex items-center justify-center">2</span>
+                        <h4 className="text-xs font-bold text-amber-200 uppercase tracking-wider">Choose Shooting Discipline *</h4>
+                      </div>
+                      <span className="text-[10px] text-amber-400 font-mono">STEP 2 OF 3</span>
+                    </div>
+                    <p className="text-xs text-stone-400 normal-case">
+                      Please select whether you want to proceed with <strong>Air Rifle</strong> (18 slots/hr) or <strong>Air Pistol</strong> (6 slots/hr). Slot availability below will update based on your choice.
+                    </p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {SHOOTING_CATEGORIES.map(cat => {
                         const isSelected = bookingCategory === cat;
+                        const isRifle = cat === 'Air Rifle';
                         return (
                           <div
                             key={cat}
-                            onClick={() => { setBookingCategory(cat); setBookingForm({...bookingForm, slotId: ''}); }}
-                            className={`cursor-pointer p-4 rounded-sm border-2 transition text-left flex flex-col justify-between ${isSelected ? 'border-amber-500 bg-amber-950/40 shadow-lg shadow-amber-900/30' : 'border-stone-700 bg-stone-900 hover:border-amber-700/50'}`}
+                            onClick={() => { setBookingCategory(cat); setBookingForm({ ...bookingForm, slotId: '' }); }}
+                            className={`cursor-pointer p-4 rounded-sm border-2 transition text-left flex flex-col justify-between relative overflow-hidden ${isSelected ? 'border-amber-500 bg-amber-950/50 shadow-lg shadow-amber-900/30' : 'border-stone-700 bg-stone-950 hover:border-amber-700/50'}`}
                           >
-                            <div className="flex items-center justify-between mb-2">
-                              {cat === 'Air Rifle' ? <Crosshair size={20} className={isSelected ? 'text-amber-400' : 'text-stone-500'}/> : <Target size={20} className={isSelected ? 'text-amber-400' : 'text-stone-500'}/>}
-                              <span className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${isSelected ? 'border-amber-400 bg-amber-400' : 'border-stone-600'}`}>
-                                {isSelected && <span className="w-1.5 h-1.5 bg-black rounded-full"></span>}
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-2.5">
+                                <div className={`p-2 rounded ${isSelected ? 'bg-amber-500/20 text-amber-400' : 'bg-stone-800 text-stone-400'}`}>
+                                  {isRifle ? <Crosshair size={22} /> : <Target size={22} />}
+                                </div>
+                                <div>
+                                  <div className={`font-black text-base uppercase tracking-wider ${isSelected ? 'text-amber-200' : 'text-stone-200'}`}>
+                                    {cat}
+                                  </div>
+                                  <div className="text-[10px] text-stone-400 normal-case">
+                                    {isRifle ? '10m Precision PCP Match Rifle' : '10m Precision Air Pistol'}
+                                  </div>
+                                </div>
+                              </div>
+                              <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${isSelected ? 'border-amber-400 bg-amber-400' : 'border-stone-600'}`}>
+                                {isSelected && <span className="w-2 h-2 bg-stone-950 rounded-full"></span>}
                               </span>
                             </div>
-                            <div>
-                              <div className={`font-black text-sm uppercase ${isSelected ? 'text-amber-200' : 'text-stone-200'}`}>{cat}</div>
-                              <div className="text-[10px] text-stone-400 normal-case mt-0.5">
-                                {cat === 'Air Rifle' ? '10m Precision PCP Target Rifle' : '10m Match Precision Air Pistol'}
-                              </div>
+
+                            {/* Slot Capacity Badge */}
+                            <div className="flex items-center justify-between pt-2 border-t border-stone-800">
+                              <span className="text-[10px] text-stone-400 uppercase tracking-widest font-mono">HOURLY CAPACITY</span>
+                              <span className={`text-xs font-black px-2.5 py-0.5 rounded-full font-mono ${isSelected ? 'bg-amber-400 text-black' : 'bg-stone-800 text-amber-300'}`}>
+                                {isRifle ? '18 SLOTS / HR' : '6 SLOTS / HR'}
+                              </span>
                             </div>
                           </div>
                         );
                       })}
                     </div>
-                    {!bookingCategory && (
-                      <p className="text-xs text-amber-500/80 mt-2 normal-case flex items-center gap-1">
-                        ⚠️ Please select either Air Rifle or Pistol to view available duty slots.
-                      </p>
-                    )}
                   </div>
 
-                  {/* 3. PARTICIPANT DETAILS */}
-                  <div>
-                    <label className="block text-xs font-bold text-amber-200/80 uppercase mb-2">Candidate Full Name</label>
-                    <input 
-                      required 
-                      type="text" 
-                      placeholder="John Doe" 
-                      className="w-full bg-stone-900 border-2 border-amber-700/50 rounded-sm px-4 py-3 text-amber-100 outline-none focus:border-amber-500 text-sm"
-                      value={bookingForm.name} 
-                      onChange={e => setBookingForm({...bookingForm, name: e.target.value})} 
-                    />
-                  </div>
+                  {/* 3. TIME SLOT SELECTION */}
+                  <div className="bg-stone-900/90 p-5 rounded-sm border border-amber-700/40 space-y-4">
+                    <div className="flex items-center justify-between border-b border-amber-800/40 pb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-amber-600 text-stone-950 font-black text-xs flex items-center justify-center">3</span>
+                        <h4 className="text-xs font-bold text-amber-200 uppercase tracking-wider">
+                          Select Duty Time Slot {bookingCategory ? `(${bookingCategory} · ${bookingDate})` : `(${bookingDate})`}
+                        </h4>
+                      </div>
+                      {bookingCategory && (
+                        <span className="text-[10px] text-amber-400 font-mono font-bold">
+                          {bookingCategory === 'Air Rifle' ? '18 MAX / SLOT' : '6 MAX / SLOT'}
+                        </span>
+                      )}
+                    </div>
 
-                  {/* 4. TIME SLOT SELECTION */}
-                  <div>
-                    <label className="block text-xs font-bold text-amber-200/80 uppercase mb-2">
-                      3. Select Time Slot {bookingCategory ? `(${bookingCategory} · ${bookingDate})` : `(${bookingDate})`}
-                    </label>
-                    {bookingSlots.length === 0 ? (
+                    {!bookingCategory ? (
+                      <div className="text-center p-6 bg-stone-950 rounded border border-dashed border-amber-700/40 space-y-2">
+                        <AlertTriangle size={24} className="text-amber-500 mx-auto" />
+                        <p className="text-xs font-bold text-amber-200 uppercase tracking-wider">
+                          Selection Required: Air Rifle or Air Pistol
+                        </p>
+                        <p className="text-[11px] text-stone-400 normal-case max-w-md mx-auto">
+                          Please select whether you want to proceed with <strong>Air Rifle</strong> (18 slots/hr) or <strong>Air Pistol</strong> (6 slots/hr) in Step 2 above to view available time slots for {bookingDate}.
+                        </p>
+                      </div>
+                    ) : bookingSlots.length === 0 ? (
                       <div className="text-amber-400 bg-stone-950 p-5 rounded border border-amber-900/50 text-xs text-center">
                         <p className="font-bold mb-1">
-                          {!bookingCategory ? '⬆️ Select a shooting category above to populate slots' : `⚠️ No Slots Available for ${bookingCategory} on ${bookingDate}`}
+                          ⚠️ No Slots Available for {bookingCategory} on {bookingDate}
                         </p>
                         <p className="text-stone-400 normal-case">
-                          {bookingCategory ? 'Check back later or try the other event date.' : 'Duty slots are scheduled independently per discipline.'}
+                          Check back later or try the other event date. Duty slots are scheduled independently per discipline.
                         </p>
-                        {bookingCategory && slots.length === 0 && (
+                        {slots.length === 0 && (
                           <div className="mt-3">
                             <button
                               type="button"
@@ -1606,14 +1981,14 @@ return (
                               disabled={processingAction}
                               className="bg-amber-700 hover:bg-amber-600 text-white text-xs font-bold px-4 py-2 rounded-sm border border-amber-500 transition uppercase tracking-wider inline-flex items-center gap-1.5 shadow"
                             >
-                              {processingAction ? <RefreshCw size={12} className="animate-spin"/> : <Clock size={12}/>}
+                              {processingAction ? <RefreshCw size={12} className="animate-spin" /> : <Clock size={12} />}
                               ⚡ Load Standard Schedule (08:00 - 16:00 HRS)
                             </button>
                           </div>
                         )}
                       </div>
                     ) : (
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                         {bookingSlots.map(slot => {
                           const isFull = (slot.booked || 0) >= slot.capacity;
                           const isSelected = bookingForm.slotId === slot.id;
@@ -1623,16 +1998,16 @@ return (
                               key={slot.id}
                               type="button"
                               disabled={isFull}
-                              onClick={() => !isFull && setBookingForm({...bookingForm, slotId: slot.id})}
-                              className={`p-3 rounded-sm border-2 text-center transition flex flex-col items-center justify-center ${isSelected ? 'border-amber-400 bg-amber-950/60 shadow-lg shadow-amber-900/30' : 'border-stone-700 bg-stone-900 hover:border-amber-700/50'} ${isFull ? 'opacity-40 cursor-not-allowed border-red-950 bg-stone-950 text-stone-500' : ''}`}
+                              onClick={() => !isFull && setBookingForm({ ...bookingForm, slotId: slot.id })}
+                              className={`p-3 rounded-sm border-2 text-center transition flex flex-col items-center justify-center ${isSelected ? 'border-amber-400 bg-amber-950/60 shadow-lg shadow-amber-900/30' : 'border-stone-700 bg-stone-950 hover:border-amber-700/50'} ${isFull ? 'opacity-40 cursor-not-allowed border-red-950 bg-stone-950 text-stone-500' : ''}`}
                             >
-                              <div className={`font-black text-sm ${isSelected ? 'text-amber-300' : 'text-amber-100'}`}>{slot.time}</div>
-                              <div className="mt-1">
+                              <div className={`font-black text-sm font-mono ${isSelected ? 'text-amber-300' : 'text-amber-100'}`}>{slot.time}</div>
+                              <div className="mt-1 font-mono">
                                 {isFull ? (
                                   <span className="text-[10px] font-bold text-red-400 uppercase">FULL</span>
                                 ) : (
-                                  <span className={`text-[10px] font-bold ${remaining < 10 ? 'text-amber-400' : 'text-green-400'}`}>
-                                    ✓ {remaining} Open
+                                  <span className={`text-[10px] font-bold ${remaining <= 3 ? 'text-amber-400' : 'text-green-400'}`}>
+                                    {remaining} / {slot.capacity} Open
                                   </span>
                                 )}
                               </div>
@@ -1643,12 +2018,13 @@ return (
                     )}
                   </div>
 
-                  <button 
-                    type="submit" 
-                    className="w-full bg-amber-700 hover:bg-amber-600 text-amber-100 font-bold py-4 rounded-sm transition border-2 border-amber-600 shadow-xl uppercase tracking-widest text-sm flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed" 
-                    disabled={!bookingCategory || !bookingForm.slotId || !bookingForm.name}
+                  <button
+                    type="submit"
+                    className="w-full bg-amber-700 hover:bg-amber-600 text-amber-100 font-bold py-4 rounded-sm transition border-2 border-amber-600 shadow-xl uppercase tracking-widest text-sm flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                    disabled={!bookingCategory || !bookingForm.slotId || !bookingForm.name || processingAction}
                   >
-                    <CheckCircle size={18}/> CONFIRM REGISTRATION & ISSUE PASS
+                    {processingAction ? <RefreshCw size={18} className="animate-spin" /> : <CheckCircle size={18} />}
+                    {processingAction ? 'PROCESSING BOOKING...' : 'CONFIRM REGISTRATION & ISSUE PASS'}
                   </button>
                 </form>
               )}
@@ -1667,11 +2043,11 @@ return (
                 <p className="text-xs text-stone-400 mt-1 uppercase tracking-widest">Official Credentials & Performance Record</p>
               </div>
               {activeParticipant && (
-                <button 
+                <button
                   onClick={() => { setActiveProfileQuery(''); setProfileQuery(''); }}
                   className="text-xs bg-stone-800 hover:bg-stone-700 text-amber-300 px-4 py-2 rounded border border-amber-700/50 font-bold transition flex items-center gap-2"
                 >
-                  <Search size={14}/> Query Another Pass
+                  <Search size={14} /> Query Another Pass
                 </button>
               )}
             </div>
@@ -1680,7 +2056,7 @@ return (
             {!activeParticipant && (
               <div className="bg-stone-800/80 rounded-sm p-8 border-2 border-amber-700 shadow-2xl max-w-xl mx-auto text-center">
                 <div className="w-16 h-16 bg-amber-900/30 rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-amber-600">
-                  <Shield size={32} className="text-amber-500"/>
+                  <Shield size={32} className="text-amber-500" />
                 </div>
                 <h3 className="text-xl font-black text-amber-100 mb-2 uppercase">Access Event Pass</h3>
                 <p className="text-xs text-stone-400 mb-6 leading-relaxed">
@@ -1689,16 +2065,16 @@ return (
 
                 {profileSearchError && (
                   <div className="mb-4 bg-red-900/40 border border-red-500 text-red-200 px-4 py-2.5 rounded text-xs flex items-center gap-2 text-left">
-                    <AlertTriangle size={16} className="shrink-0 text-red-400"/> {profileSearchError}
+                    <AlertTriangle size={16} className="shrink-0 text-red-400" /> {profileSearchError}
                   </div>
                 )}
 
                 <form onSubmit={handleProfileSearch} className="space-y-4 text-left">
                   <div>
                     <label className="block text-xs font-bold text-amber-200/80 mb-2 uppercase">Email or Ticket ID</label>
-                    <input 
+                    <input
                       required
-                      type="text" 
+                      type="text"
                       placeholder="candidate@email.com or TKT-XXXXXX"
                       value={profileQuery}
                       onChange={e => setProfileQuery(e.target.value)}
@@ -1706,7 +2082,7 @@ return (
                     />
                   </div>
                   <button type="submit" className="w-full bg-amber-700 hover:bg-amber-600 text-white font-bold py-3.5 rounded-sm transition border-2 border-amber-600 shadow-lg uppercase tracking-wider text-sm flex items-center justify-center gap-2">
-                    <Search size={16}/> Retrieve Event Pass
+                    <Search size={16} /> Retrieve Event Pass
                   </button>
                 </form>
 
@@ -1724,12 +2100,12 @@ return (
               <div className="space-y-8">
                 {/* Main Pass Container with print-pass-card class */}
                 <div className="print-pass-card bg-stone-800/90 border-2 border-amber-600 rounded-sm shadow-2xl overflow-hidden">
-                  
+
                   {/* Pass Top Banner */}
                   <div className="bg-gradient-to-r from-stone-950 via-amber-950 to-stone-950 p-4 border-b-2 border-amber-700/60 flex flex-wrap justify-between items-center gap-3">
                     <div className="flex items-center gap-2 text-amber-400 font-bold text-xs tracking-widest uppercase">
-                      <Shield size={18} className="text-amber-500"/>
-                      LAKSHYA · OFFICIAL EVENT PASS
+                      <Shield size={18} className="text-amber-500" />
+                      LAKSHYA 2.0 · OFFICIAL EVENT PASS
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="bg-amber-500 text-stone-950 text-xs font-black px-3 py-1 rounded uppercase tracking-wider">
@@ -1737,7 +2113,7 @@ return (
                       </span>
                       {activeParticipant.checkedIn ? (
                         <span className="bg-green-900/60 text-green-400 border border-green-500 text-xs font-bold px-3 py-1 rounded uppercase flex items-center gap-1">
-                          <CheckCircle size={12}/> CHECKED IN
+                          <CheckCircle size={12} /> CHECKED IN
                         </span>
                       ) : (
                         <span className="bg-stone-900 text-stone-400 border border-stone-700 text-xs font-bold px-3 py-1 rounded uppercase">
@@ -1749,7 +2125,7 @@ return (
 
                   {/* Pass Body (Two Columns: QR Pass on Left, Details & Scores on Right) */}
                   <div className="p-6 sm:p-8 grid md:grid-cols-12 gap-8">
-                    
+
                     {/* LEFT COLUMN: QR & Identification Badge (5 cols) */}
                     <div className="md:col-span-5 flex flex-col items-center justify-between bg-stone-900/80 p-6 rounded border border-amber-700/40 text-center">
                       <div className="w-full">
@@ -1773,17 +2149,17 @@ return (
                       <div className="w-full flex flex-col items-center">
                         <div className="bg-white p-3.5 rounded shadow-lg shadow-black/60 flex items-center justify-center">
                           {activeParticipant.qrToken ? (
-                            <QRCodeSVG 
-                              value={activeParticipant.qrToken} 
-                              size={170} 
-                              bgColor="#ffffff" 
-                              fgColor="#1c1917" 
-                              level="H" 
-                              includeMargin={false} 
+                            <QRCodeSVG
+                              value={activeParticipant.qrToken}
+                              size={170}
+                              bgColor="#ffffff"
+                              fgColor="#1c1917"
+                              level="H"
+                              includeMargin={false}
                             />
                           ) : (
                             <div className="w-[170px] h-[170px] flex flex-col items-center justify-center text-xs text-stone-600 font-mono p-2">
-                              <AlertTriangle size={24} className="mb-2 text-stone-500"/>
+                              <AlertTriangle size={24} className="mb-2 text-stone-500" />
                               QR Not Available
                               <span className="text-[10px] text-stone-400 mt-1">(Legacy Record)</span>
                             </div>
@@ -1800,16 +2176,16 @@ return (
 
                     {/* RIGHT COLUMN: Mission Duty, Check-In, Scores, Ranking (7 cols) */}
                     <div className="md:col-span-7 space-y-6">
-                      
+
                       {/* Booking & Duty Schedule Box */}
                       <div className="bg-stone-900/60 border border-amber-700/40 rounded p-5">
                         <div className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                          <Clock size={16}/> Assigned Duty Schedule
+                          <Clock size={16} /> Assigned Duty Schedule
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
                           <div className="bg-stone-950 p-3 rounded border border-stone-800">
                             <span className="text-stone-500 uppercase block mb-0.5">Date</span>
-                            <span className="text-amber-100 font-bold text-sm">{activeParticipant.slotDate || '5th Dec'}</span>
+                            <span className="text-amber-100 font-bold text-sm">{activeParticipant.slotDate || '26th September'}</span>
                           </div>
                           <div className="bg-stone-950 p-3 rounded border border-stone-800">
                             <span className="text-stone-500 uppercase block mb-0.5">Time Slot</span>
@@ -1826,7 +2202,7 @@ return (
                           <span className="text-stone-400 uppercase">Gate Entry:</span>
                           {activeParticipant.checkedIn ? (
                             <span className="text-green-400 font-bold flex items-center gap-1.5">
-                              <CheckCircle size={14}/> Verified at {formatCheckInDisplayTime(activeParticipant.checkedInAt)}
+                              <CheckCircle size={14} /> Verified at {formatCheckInDisplayTime(activeParticipant.checkedInAt)}
                             </span>
                           ) : (
                             <span className="text-yellow-400 font-bold">
@@ -1839,7 +2215,7 @@ return (
                       {/* Scoring Dossier */}
                       <div className="bg-stone-900/60 border border-amber-700/40 rounded p-5">
                         <div className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                          <Target size={16}/> Shooting Performance Dossier
+                          <Target size={16} /> Shooting Performance Dossier
                         </div>
 
                         {hasActiveScores && activeParticipantStats ? (
@@ -1880,7 +2256,7 @@ return (
                                         Subtotal: {cardTotal.toFixed(1)} pts
                                       </span>
                                     </div>
-                                    <div className="grid grid-cols-10 gap-1 text-center font-mono">
+                                    <div className="grid grid-cols-5 sm:grid-cols-10 gap-1 text-center font-mono">
                                       {Array(10).fill(0).map((_, shotIdx) => (
                                         <div key={shotIdx} className="bg-stone-900 border border-stone-700 py-1 rounded text-[11px] text-amber-200">
                                           {card.scores && card.scores[shotIdx] !== '' && card.scores[shotIdx] !== undefined ? card.scores[shotIdx] : '-'}
@@ -1894,7 +2270,7 @@ return (
                           </div>
                         ) : (
                           <div className="bg-stone-950 p-6 rounded border border-stone-800 text-center">
-                            <Crosshair size={32} className="mx-auto mb-2 text-stone-600 opacity-60"/>
+                            <Crosshair size={32} className="mx-auto mb-2 text-stone-600 opacity-60" />
                             <div className="text-sm font-bold text-stone-300">Scores Not Available Yet</div>
                             <p className="text-xs text-stone-500 mt-1">
                               Your 10-shot scorecard will be officially entered by the Range Officer after completing your shooting duty.
@@ -1912,11 +2288,11 @@ return (
                       Registered Email: <span className="text-amber-200 font-mono">{activeParticipant.email}</span>
                     </div>
                     <div className="flex gap-2">
-                      <button 
+                      <button
                         onClick={() => window.print()}
                         className="bg-stone-800 hover:bg-stone-700 text-amber-100 px-4 py-2 rounded font-bold border border-amber-700/50 flex items-center gap-1.5 transition"
                       >
-                        <Download size={14}/> Print / Save Pass
+                        <Download size={14} /> Print / Save Pass
                       </button>
                     </div>
                   </div>
@@ -1937,13 +2313,13 @@ return (
               </div>
               <div className="w-full md:w-auto flex items-center gap-2">
                 <div className="relative w-full md:w-64">
-                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400"/>
-                  <input 
-                    type="text" 
-                    placeholder="Search candidate..." 
+                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                  <input
+                    type="text"
+                    placeholder="Search candidate..."
                     className="bg-stone-800 border-2 border-amber-700/50 rounded-sm pl-9 pr-4 py-2 text-amber-100 w-full outline-none focus:border-amber-500 text-sm"
-                    value={searchTerm} 
-                    onChange={e => setSearchTerm(e.target.value)} 
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
                   />
                 </div>
               </div>
@@ -1955,12 +2331,12 @@ return (
                 {/* Category Filter */}
                 <div className="flex bg-stone-800 p-1 rounded-sm border border-amber-700/40">
                   {SHOOTING_CATEGORIES.map(cat => (
-                    <button 
-                      key={cat} 
+                    <button
+                      key={cat}
                       onClick={() => setLbCategory(cat)}
                       className={`px-5 py-2 rounded-sm text-xs font-bold transition flex items-center gap-2 ${lbCategory === cat ? 'bg-amber-700 text-white shadow' : 'text-stone-400 hover:text-amber-100'}`}
                     >
-                      {cat === 'Air Rifle' ? <Crosshair size={14}/> : <Target size={14}/>}
+                      {cat === 'Air Rifle' ? <Crosshair size={14} /> : <Target size={14} />}
                       {cat}
                     </button>
                   ))}
@@ -1973,61 +2349,61 @@ return (
             </div>
 
             <div className="bg-stone-800/80 rounded-sm border-2 border-amber-700 overflow-x-auto shadow-2xl">
-               <table className="w-full text-left border-collapse min-w-[640px]">
-                  <thead className="bg-stone-900 text-amber-200/60 text-xs tracking-widest border-b-2 border-amber-700">
+              <table className="w-full text-left border-collapse min-w-[640px]">
+                <thead className="bg-stone-900 text-amber-200/60 text-xs tracking-widest border-b-2 border-amber-700">
+                  <tr>
+                    <th className="p-4 text-center w-16">Rank</th>
+                    <th className="p-4">Candidate</th>
+                    <th className="p-4 text-center">Rounds</th>
+                    <th className="p-4 text-center">Total 10s</th>
+                    <th className="p-4 text-center text-red-400">Penalty</th>
+                    <th className="p-4 text-right">Total Score</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y-2 divide-amber-700/20 text-sm">
+                  {sortedParticipants.length === 0 ? (
                     <tr>
-                      <th className="p-4 text-center w-16">Rank</th>
-                      <th className="p-4">Candidate</th>
-                      <th className="p-4 text-center">Rounds</th>
-                      <th className="p-4 text-center">Total 10s</th>
-                      <th className="p-4 text-center text-red-400">Penalty</th>
-                      <th className="p-4 text-right">Total Score</th>
+                      <td colSpan="6" className="p-8 text-center text-stone-500 italic">
+                        No {lbCategory} participants found {searchTerm ? `matching "${searchTerm}"` : ''}.
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y-2 divide-amber-700/20 text-sm">
-                    {sortedParticipants.length === 0 ? (
-                      <tr>
-                        <td colSpan="6" className="p-8 text-center text-stone-500 italic">
-                          No {lbCategory} participants found {searchTerm ? `matching "${searchTerm}"` : ''}.
-                        </td>
-                      </tr>
-                    ) : (
-                      sortedParticipants.map((p, idx) => {
-                        const stats = calculateStats(p);
-                        const validCards = (p.scorecards || []).filter(c => !c.isDQ).length;
-                        const isPodium = idx < 3;
-                        return (
-                          <tr key={p.id} className={`hover:bg-amber-900/20 transition ${idx === 0 ? 'bg-amber-950/20' : idx === 1 ? 'bg-stone-900/40' : idx === 2 ? 'bg-amber-950/10' : ''}`}>
-                            <td className="p-4 text-center font-black text-amber-500 text-base">
-                              {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`}
-                            </td>
-                            <td className="p-4">
-                              <div className="font-bold text-amber-100 flex items-center gap-2">
-                                {p.name}
-                                {isPodium && (
-                                  <span className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/40 px-1.5 py-0.2 rounded uppercase font-normal">
-                                    Podium
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-xs text-amber-200/60">{p.gender}{p.category ? ` · ${p.category}` : ''}</div>
-                            </td>
-                            <td className="p-4 text-center text-stone-400 text-xs">
-                              {validCards} Active {p.scorecards?.length > validCards && `(+${p.scorecards.length - validCards} DQ)`}
-                            </td>
-                            <td className="p-4 text-center text-amber-200/80 font-bold">
-                                {stats.scoreCounts[10] || 0}
-                            </td>
-                            <td className="p-4 text-center text-red-400 font-bold">
-                                {stats.totalPenalty > 0 ? `-${stats.totalPenalty}` : '-'}
-                            </td>
-                            <td className="p-4 text-right font-black text-xl text-amber-500">{p.totalScore.toFixed(1)}</td>
-                          </tr>
-                        )
-                      })
-                    )}
-                  </tbody>
-               </table>
+                  ) : (
+                    sortedParticipants.map((p, idx) => {
+                      const stats = calculateStats(p);
+                      const validCards = (p.scorecards || []).filter(c => !c.isDQ).length;
+                      const isPodium = idx < 3;
+                      return (
+                        <tr key={p.id} className={`hover:bg-amber-900/20 transition ${idx === 0 ? 'bg-amber-950/20' : idx === 1 ? 'bg-stone-900/40' : idx === 2 ? 'bg-amber-950/10' : ''}`}>
+                          <td className="p-4 text-center font-black text-amber-500 text-base">
+                            {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`}
+                          </td>
+                          <td className="p-4">
+                            <div className="font-bold text-amber-100 flex items-center gap-2">
+                              {p.name}
+                              {isPodium && (
+                                <span className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/40 px-1.5 py-0.2 rounded uppercase font-normal">
+                                  Podium
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs text-amber-200/60">{p.gender}{p.category ? ` · ${p.category}` : ''}</div>
+                          </td>
+                          <td className="p-4 text-center text-stone-400 text-xs">
+                            {validCards} Active {p.scorecards?.length > validCards && `(+${p.scorecards.length - validCards} DQ)`}
+                          </td>
+                          <td className="p-4 text-center text-amber-200/80 font-bold">
+                            {stats.scoreCounts[10] || 0}
+                          </td>
+                          <td className="p-4 text-center text-red-400 font-bold">
+                            {stats.totalPenalty > 0 ? `-${stats.totalPenalty}` : '-'}
+                          </td>
+                          <td className="p-4 text-right font-black text-xl text-amber-500">{p.totalScore.toFixed(1)}</td>
+                        </tr>
+                      )
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -2036,41 +2412,26 @@ return (
         {view === 'login' && (
           <div className="flex items-center justify-center py-16">
             <div className="bg-stone-800/90 p-10 rounded-sm border-2 border-red-700 shadow-2xl w-full max-w-md">
-              <div className="flex justify-center mb-6 text-red-500"><Shield size={64}/></div>
+              <div className="flex justify-center mb-6 text-red-500"><Shield size={64} /></div>
               <h2 className="text-2xl font-black text-center mb-8 text-red-500 uppercase">Restricted Access</h2>
-              
+
               {/* Show Error Message Conditionally */}
               {adminLoginError && (
                 <div className="mb-4 bg-red-900/50 border border-red-500 text-red-200 px-4 py-2 rounded-sm text-sm flex items-center gap-2">
-                  <AlertTriangle size={16}/> {adminLoginError}
+                  <AlertTriangle size={16} /> {adminLoginError}
                 </div>
               )}
 
               {/* PRIMARY: GOOGLE LOGIN */}
-              <div className="text-center mb-6">
-                <button 
+              <div className="text-center">
+                <button
                   onClick={handleAdminGoogleLogin}
                   className="w-full bg-red-800 hover:bg-red-700 text-amber-100 font-bold py-4 rounded-sm transition border-2 border-red-600 flex items-center justify-center gap-3 text-sm shadow-lg"
                 >
-                  <Mail size={20}/>
+                  <Mail size={20} />
                   SIGN IN WITH GOOGLE
                 </button>
-                <p className="text-[10px] text-stone-500 mt-2 uppercase tracking-wide">Authorized Personnel Only</p>
-              </div>
-
-              {/* DEV / LOCAL ADMIN TESTING ACCESS */}
-              <div className="border-t border-stone-700/60 pt-4 text-center">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsAdminAuthenticated(true);
-                    setView('admin');
-                  }}
-                  className="w-full bg-stone-900 hover:bg-stone-700 text-amber-400 hover:text-amber-300 text-xs font-bold py-3 rounded-sm border border-amber-600/50 transition flex items-center justify-center gap-2"
-                >
-                  <Key size={14}/> LOCAL TEST / ADMIN DEMO ACCESS
-                </button>
-                <span className="text-[10px] text-stone-500 block mt-1">Direct access for local range & QR check-in testing</span>
+                <p className="text-[10px] text-stone-500 mt-3 uppercase tracking-wide">Authorized Command Personnel Only</p>
               </div>
             </div>
           </div>
@@ -2081,21 +2442,21 @@ return (
           <div>
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 border-b-4 border-red-700 pb-6 gap-4">
               <div>
-                <h2 className="text-3xl font-black text-red-500 flex items-center gap-4"><Shield size={36}/> Command Center</h2>
+                <h2 className="text-3xl font-black text-red-500 flex items-center gap-4"><Shield size={36} /> Command Center</h2>
                 <p className="text-xs text-stone-400 mt-1 uppercase tracking-widest">Range Operations, Scoring & Gate Entry Desk</p>
               </div>
               <div className="flex gap-3">
-                 <button onClick={handleExport} className="px-4 py-2 bg-stone-800 border-2 border-amber-700 rounded-sm text-xs font-bold hover:bg-stone-700 flex gap-2 items-center"><Download size={16}/> Export CSV</button>
-                 <button onClick={handleLogout} className="px-4 py-2 bg-red-900/50 border-2 border-red-700 text-red-400 rounded-sm text-xs font-bold hover:bg-red-900/80 flex gap-2 items-center"><LogIn size={16}/> Logout</button>
+                <button onClick={handleExport} className="px-4 py-2 bg-stone-800 border-2 border-amber-700 rounded-sm text-xs font-bold hover:bg-stone-700 flex gap-2 items-center"><Download size={16} /> Export CSV</button>
+                <button onClick={handleLogout} className="px-4 py-2 bg-red-900/50 border-2 border-red-700 text-red-400 rounded-sm text-xs font-bold hover:bg-red-900/80 flex gap-2 items-center"><LogIn size={16} /> Logout</button>
               </div>
             </div>
 
             <div className="flex gap-2 mb-8 overflow-x-auto pb-2">
               {[
-                {id: 'slots', label: 'Duty Slots & Scoring', icon: Clock},
-                {id: 'checkin', label: 'QR Check-In', icon: QrCode},
-                {id: 'participants', label: 'All Personnel', icon: Users},
-                {id: 'access', label: 'Access Control', icon: Lock}
+                { id: 'slots', label: 'Duty Slots & Scoring', icon: Clock },
+                { id: 'checkin', label: 'QR Check-In', icon: QrCode },
+                { id: 'participants', label: 'All Personnel', icon: Users },
+                { id: 'access', label: 'Access Control', icon: Lock }
               ].map(tab => (
                 <button key={tab.id} onClick={() => { setAdminTab(tab.id); if (tab.id !== 'checkin') stopScanner(); }} className={`px-5 py-3 rounded-sm uppercase text-xs font-bold flex items-center gap-2 border-2 transition whitespace-nowrap ${adminTab === tab.id ? 'bg-amber-700 text-amber-100 border-amber-500' : 'text-amber-200/60 border-transparent bg-stone-800 hover:bg-stone-700'}`}>
                   <tab.icon size={16} /> {tab.label}
@@ -2105,122 +2466,127 @@ return (
 
             {adminTab === 'slots' && (
               <div className="space-y-6">
-                 {/* FEEDBACK TOAST */}
-                 {slotFeedback && (
-                   <div className={`p-3 rounded text-xs font-bold flex items-center justify-between border ${slotFeedback.type === 'success' ? 'bg-green-950/80 text-green-300 border-green-500' : 'bg-red-950/80 text-red-300 border-red-500'}`}>
-                     <div className="flex items-center gap-2">
-                       {slotFeedback.type === 'success' ? <CheckCircle size={15}/> : <AlertTriangle size={15}/>}
-                       <span>{slotFeedback.msg}</span>
-                     </div>
-                     <button onClick={() => setSlotFeedback(null)} className="text-stone-400 hover:text-white text-xs">✕</button>
-                   </div>
-                 )}
+                {/* FEEDBACK TOAST */}
+                {slotFeedback && (
+                  <div className={`p-3 rounded text-xs font-bold flex items-center justify-between border ${slotFeedback.type === 'success' ? 'bg-green-950/80 text-green-300 border-green-500' : 'bg-red-950/80 text-red-300 border-red-500'}`}>
+                    <div className="flex items-center gap-2">
+                      {slotFeedback.type === 'success' ? <CheckCircle size={15} /> : <AlertTriangle size={15} />}
+                      <span>{slotFeedback.msg}</span>
+                    </div>
+                    <button onClick={() => setSlotFeedback(null)} className="text-stone-400 hover:text-white text-xs">✕</button>
+                  </div>
+                )}
 
-                 {/* DATE & CATEGORY FILTER FOR ADMIN VIEW */}
-                 <div className="flex flex-wrap items-center justify-between gap-4 bg-stone-800 p-4 border border-amber-700/30 rounded-sm">
-                   <div className="flex flex-wrap items-center gap-4">
-                     <div className="flex items-center gap-2">
-                       <span className="text-amber-500 font-bold text-xs uppercase">Date:</span>
-                       <div className="flex gap-1.5 bg-stone-900 p-1 rounded border border-stone-700">
-                         {EVENT_DATES.map(date => (
-                           <button
-                             key={date}
-                             onClick={() => setAdminViewDate(date)}
-                             className={`px-3 py-1 rounded text-xs font-bold transition ${adminViewDate === date ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'}`}
-                           >
-                             {date}
-                           </button>
-                         ))}
-                       </div>
-                     </div>
-
-                     <div className="flex items-center gap-2">
-                       <span className="text-amber-500 font-bold text-xs uppercase">Discipline:</span>
-                       <div className="flex gap-1.5 bg-stone-900 p-1 rounded border border-stone-700">
-                         {['All', ...SHOOTING_CATEGORIES].map(cat => (
-                           <button
-                             key={cat}
-                             onClick={() => setAdminViewCategory(cat)}
-                             className={`px-3 py-1 rounded text-xs font-bold transition ${adminViewCategory === cat ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'}`}
-                           >
-                             {cat}
-                           </button>
-                         ))}
-                       </div>
-                     </div>
-                   </div>
-
-                   <button 
-                     type="button"
-                     onClick={handleLoadStandardSchedule}
-                     className="text-xs bg-amber-700 hover:bg-amber-600 text-white px-4 py-2.5 rounded flex items-center gap-2 font-bold shadow-md transition border border-amber-500 uppercase tracking-wider"
-                     disabled={processingAction}
-                   >
-                     {processingAction ? (
-                       <RefreshCw size={14} className="animate-spin"/>
-                     ) : (
-                       <PlayCircle size={14}/> 
-                     )}
-                     {processingAction ? "PROCESSING..." : "LOAD FULL 2-DAY SCHEDULE"}
-                   </button>
-                 </div>
-
-                 {/* CREATE NEW SLOT CARD */}
-                 <div className="bg-stone-800/80 border-2 border-amber-700/40 p-5 rounded-sm shadow-xl">
-                    <h4 className="font-bold text-amber-300 flex items-center gap-2 mb-3 text-sm uppercase tracking-wider">
-                      <ListPlus size={18} className="text-amber-400"/> Create New Duty Slot
-                    </h4>
-                    
-                    <form onSubmit={handleAddSlot} className="space-y-3">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 items-end">
-                         <div>
-                           <label className="block text-xs font-bold text-stone-400 mb-1 uppercase">Date</label>
-                           <select 
-                             className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs"
-                             value={newSlotDate}
-                             onChange={e => setNewSlotDate(e.target.value)}
-                           >
-                             {EVENT_DATES.map(d => <option key={d} value={d}>{d}</option>)}
-                           </select>
-                         </div>
-                         <div>
-                           <label className="block text-xs font-bold text-stone-400 mb-1 uppercase">Discipline</label>
-                           <select 
-                             className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs"
-                             value={newSlotCategory}
-                             onChange={e => setNewSlotCategory(e.target.value)}
-                           >
-                             {SHOOTING_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                           </select>
-                         </div>
-                         <div>
-                           <label className="block text-xs font-bold text-stone-400 mb-1 uppercase">Time (e.g. 09:00 HRS)</label>
-                           <input 
-                             required
-                             type="text" 
-                             className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs font-mono"
-                             placeholder="09:00 HRS"
-                             value={newSlotTime}
-                             onChange={e => setNewSlotTime(e.target.value)}
-                           />
-                         </div>
-                         <div>
-                           <label className="block text-xs font-bold text-stone-400 mb-1 uppercase">Capacity (Limit)</label>
-                           <input 
-                             required
-                             type="number" 
-                             min="1"
-                             max="500"
-                             className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs font-mono"
-                             value={newSlotCapacity}
-                             onChange={e => setNewSlotCapacity(e.target.value)}
-                           />
-                         </div>
+                {/* DATE & CATEGORY FILTER FOR ADMIN VIEW */}
+                <div className="flex flex-wrap items-center justify-between gap-4 bg-stone-800 p-4 border border-amber-700/30 rounded-sm">
+                  <div className="flex flex-wrap items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-amber-500 font-bold text-xs uppercase">Date:</span>
+                      <div className="flex gap-1.5 bg-stone-900 p-1 rounded border border-stone-700">
+                        {EVENT_DATES.map(date => (
+                          <button
+                            key={date}
+                            onClick={() => setAdminViewDate(date)}
+                            className={`px-3 py-1 rounded text-xs font-bold transition ${adminViewDate === date ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'}`}
+                          >
+                            {date}
+                          </button>
+                        ))}
                       </div>
+                    </div>
 
-                      {/* Quick Preset Buttons */}
-                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                        <span className="text-[10px] text-stone-500 uppercase mr-1">Quick Presets:</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-amber-500 font-bold text-xs uppercase">Discipline:</span>
+                      <div className="flex gap-1.5 bg-stone-900 p-1 rounded border border-stone-700">
+                        {['All', ...SHOOTING_CATEGORIES].map(cat => (
+                          <button
+                            key={cat}
+                            onClick={() => setAdminViewCategory(cat)}
+                            className={`px-3 py-1 rounded text-xs font-bold transition ${adminViewCategory === cat ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'}`}
+                          >
+                            {cat}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleLoadStandardSchedule}
+                    className="text-xs bg-amber-700 hover:bg-amber-600 text-white px-4 py-2.5 rounded flex items-center gap-2 font-bold shadow-md transition border border-amber-500 uppercase tracking-wider"
+                    disabled={processingAction}
+                  >
+                    {processingAction ? (
+                      <RefreshCw size={14} className="animate-spin" />
+                    ) : (
+                      <PlayCircle size={14} />
+                    )}
+                    {processingAction ? "PROCESSING..." : "LOAD FULL 2-DAY SCHEDULE"}
+                  </button>
+                </div>
+
+                {/* CREATE NEW SLOT CARD */}
+                <div className="bg-stone-800/80 border-2 border-amber-700/40 p-5 rounded-sm shadow-xl">
+                  <h4 className="font-bold text-amber-300 flex items-center gap-2 mb-3 text-sm uppercase tracking-wider">
+                    <ListPlus size={18} className="text-amber-400" /> Create New Duty Slot
+                  </h4>
+
+                  <form onSubmit={handleAddSlot} className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 items-end">
+                      <div>
+                        <label className="block text-xs font-bold text-stone-400 mb-1 uppercase">Date</label>
+                        <select
+                          className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs"
+                          value={newSlotDate}
+                          onChange={e => setNewSlotDate(e.target.value)}
+                        >
+                          {EVENT_DATES.map(d => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-stone-400 mb-1 uppercase">Discipline</label>
+                        <select
+                          className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs"
+                          value={newSlotCategory}
+                          onChange={e => {
+                            const cat = e.target.value;
+                            setNewSlotCategory(cat);
+                            setNewSlotCapacity(getDisciplineCapacity(cat));
+                          }}
+                        >
+                          {SHOOTING_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-stone-400 mb-1 uppercase">Time (e.g. 09:00 HRS)</label>
+                        <input
+                          required
+                          type="text"
+                          className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs font-mono"
+                          placeholder="09:00 HRS"
+                          value={newSlotTime}
+                          onChange={e => setNewSlotTime(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-stone-400 mb-1 uppercase">Capacity (Limit)</label>
+                        <input
+                          required
+                          type="number"
+                          min="1"
+                          max="500"
+                          className="w-full bg-stone-900 border border-stone-600 p-2.5 rounded-sm text-white outline-none focus:border-amber-500 text-xs font-mono"
+                          value={newSlotCapacity}
+                          onChange={e => setNewSlotCapacity(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Quick Preset Buttons */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-stone-700/50">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] text-stone-500 uppercase mr-1">Time Presets:</span>
                         {['08:00 HRS', '09:00 HRS', '10:00 HRS', '11:00 HRS', '13:00 HRS', '14:00 HRS', '15:00 HRS', '16:00 HRS'].map(tPreset => (
                           <button
                             key={tPreset}
@@ -2232,158 +2598,176 @@ return (
                           </button>
                         ))}
                       </div>
-
-                      <div className="pt-2">
-                        <button className="w-full bg-amber-700 hover:bg-amber-600 text-white py-3 rounded-sm font-bold text-xs transition border border-amber-500 shadow-md uppercase tracking-wider flex items-center justify-center gap-2">
-                          <Plus size={16}/> ADD DUTY SLOT TO SCHEDULE
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-stone-500 uppercase mr-1">Discipline Std:</span>
+                        <button
+                          type="button"
+                          onClick={() => setNewSlotCapacity(18)}
+                          className={`text-[10px] px-2.5 py-1 rounded border font-mono font-bold transition ${newSlotCapacity === 18 ? 'bg-amber-700 border-amber-500 text-white shadow' : 'bg-stone-900 border-stone-700 text-stone-300 hover:text-white'}`}
+                        >
+                          18 (Rifle)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNewSlotCapacity(6)}
+                          className={`text-[10px] px-2.5 py-1 rounded border font-mono font-bold transition ${newSlotCapacity === 6 ? 'bg-amber-700 border-amber-500 text-white shadow' : 'bg-stone-900 border-stone-700 text-stone-300 hover:text-white'}`}
+                        >
+                          6 (Pistol)
                         </button>
                       </div>
-                    </form>
-                 </div>
-                 
-                 <div className="space-y-4">
-                   {adminSlots.length === 0 && <p className="text-stone-500 text-center italic py-8">No slots for {adminViewDate}. Add one above or load the standard schedule.</p>}
-                   {adminSlots.map(slot => {
-                     const slotParticipants = participants.filter(p => p.slotId === slot.id);
-                     const isExpanded = expandedSlot === slot.id;
-                     
-                     return (
-                       <div key={slot.id} className="bg-stone-800/80 border-2 border-amber-700/50 rounded-sm overflow-hidden">
-                         <div className="p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                            <div className="flex items-center gap-4 cursor-pointer flex-1" onClick={() => setExpandedSlot(isExpanded ? null : slot.id)}>
-                               {isExpanded ? <ChevronUp className="text-amber-500"/> : <ChevronDown className="text-stone-500"/>}
-                               <div>
-                                 <span className="text-xs text-amber-500 font-bold block">{slot.date} — {slot.category || 'Legacy'}</span>
-                                 <div className="font-black text-xl text-amber-100">{slot.time}</div>
-                               </div>
-                               <div className="text-xs text-amber-200/60 ml-4">{slotParticipants.length} / {slot.capacity} Candidates</div>
+                    </div>
+
+                    <div className="pt-2">
+                      <button className="w-full bg-amber-700 hover:bg-amber-600 text-white py-3 rounded-sm font-bold text-xs transition border border-amber-500 shadow-md uppercase tracking-wider flex items-center justify-center gap-2">
+                        <Plus size={16} /> ADD DUTY SLOT TO SCHEDULE
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                <div className="space-y-4">
+                  {adminSlots.length === 0 && <p className="text-stone-500 text-center italic py-8">No slots for {adminViewDate}. Add one above or load the standard schedule.</p>}
+                  {adminSlots.map(slot => {
+                    const slotParticipants = participants.filter(p => p.slotId === slot.id);
+                    const isExpanded = expandedSlot === slot.id;
+
+                    return (
+                      <div key={slot.id} className="bg-stone-800/80 border-2 border-amber-700/50 rounded-sm overflow-hidden">
+                        <div className="p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                          <div className="flex items-center gap-4 cursor-pointer flex-1" onClick={() => setExpandedSlot(isExpanded ? null : slot.id)}>
+                            {isExpanded ? <ChevronUp className="text-amber-500" /> : <ChevronDown className="text-stone-500" />}
+                            <div>
+                              <span className="text-xs text-amber-500 font-bold block">{slot.date} — {slot.category || 'Legacy'}</span>
+                              <div className="font-black text-xl text-amber-100">{slot.time}</div>
                             </div>
-                            <div className="flex items-center gap-4">
-                              <div className="text-amber-500 font-bold text-xs tracking-widest">
-                                {slotParticipants.length > 0 ? 'ACTIVE' : 'EMPTY'}
+                            <div className="text-xs text-amber-200/60 ml-4">{slotParticipants.length} / {slot.capacity} Candidates</div>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <div className="text-amber-500 font-bold text-xs tracking-widest">
+                              {slotParticipants.length > 0 ? 'ACTIVE' : 'EMPTY'}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteSlot(slot.id, slotParticipants.length);
+                              }}
+                              className="text-stone-500 hover:text-red-500 p-2 hover:bg-red-900/20 rounded transition"
+                              title="Delete Slot"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {isExpanded && (
+                          <div className="border-t-2 border-amber-700/30 p-4 bg-stone-900/50">
+                            {slotParticipants.length === 0 ? (
+                              <p className="text-stone-500 italic text-xs">No candidates assigned to this slot.</p>
+                            ) : (
+                              <div className="space-y-4">
+                                {slotParticipants.map(p => {
+                                  const isEditing = editingScoreId === p.id;
+                                  const pStats = calculateStats(p);
+                                  return (
+                                    <div key={p.id} className="bg-stone-950 p-4 rounded border border-stone-800">
+                                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
+                                        <div>
+                                          <div className="font-bold text-amber-100">{p.name}</div>
+                                          <div className="text-xs text-stone-400">
+                                            {p.email} · {p.gender} · Ticket: <span className="text-amber-400 font-mono">{p.ticketId}</span>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                          <div className="text-right">
+                                            <div className="text-xs text-stone-400">Score</div>
+                                            <div className="font-bold text-amber-400">{pStats.totalScore.toFixed(1)}</div>
+                                          </div>
+                                          <button
+                                            type="button"
+                                            onClick={() => setEditingScoreId(isEditing ? null : p.id)}
+                                            className="text-xs bg-amber-700 hover:bg-amber-600 text-white px-3 py-1.5 rounded font-bold transition"
+                                          >
+                                            {isEditing ? 'Close Scoring' : 'Enter Scores'}
+                                          </button>
+                                        </div>
+                                      </div>
+
+                                      {isEditing && (
+                                        <div className="mt-4 pt-4 border-t border-stone-800 space-y-4 animate-in fade-in">
+                                          {(p.scorecards || []).map((card, cIdx) => (
+                                            <div key={cIdx} className="bg-stone-900 p-3 rounded border border-stone-700 text-xs">
+                                              <div className="flex justify-between items-center mb-2">
+                                                <span className="font-bold text-amber-300">Round #{cIdx + 1}</span>
+                                                <label className="flex items-center gap-1 text-red-400 cursor-pointer">
+                                                  <input
+                                                    type="checkbox"
+                                                    checked={card.isDQ || false}
+                                                    onChange={e => handleScoreChange(p.id, cIdx, 'isDQ', e.target.checked)}
+                                                  />
+                                                  Disqualify
+                                                </label>
+                                              </div>
+                                              <div className="grid grid-cols-5 sm:grid-cols-10 gap-1.5 mb-2">
+                                                {Array(10).fill(0).map((_, shotIdx) => (
+                                                  <input
+                                                    key={shotIdx}
+                                                    type="number"
+                                                    step="0.1"
+                                                    min="0"
+                                                    max="10.9"
+                                                    placeholder={`S${shotIdx + 1}`}
+                                                    className="w-full bg-stone-950 border border-stone-700 p-1 text-center text-amber-100 rounded text-xs"
+                                                    value={card.scores?.[shotIdx] ?? ''}
+                                                    onChange={e => {
+                                                      const newScores = [...(card.scores || Array(10).fill(''))];
+                                                      newScores[shotIdx] = e.target.value;
+                                                      handleScoreChange(p.id, cIdx, 'scores', newScores);
+                                                    }}
+                                                  />
+                                                ))}
+                                              </div>
+                                              <div className="flex items-center gap-2">
+                                                <span className="text-stone-400">Penalty:</span>
+                                                <input
+                                                  type="number"
+                                                  min="0"
+                                                  className="w-16 bg-stone-950 border border-stone-700 p-1 text-xs text-red-400 rounded"
+                                                  value={card.penalty || ''}
+                                                  onChange={e => handleScoreChange(p.id, cIdx, 'penalty', e.target.value)}
+                                                />
+                                              </div>
+                                            </div>
+                                          ))}
+                                          <div className="flex gap-2">
+                                            <button
+                                              type="button"
+                                              onClick={() => handleAddScorecard(p.id)}
+                                              className="text-xs bg-stone-800 hover:bg-stone-700 text-amber-300 px-3 py-1.5 rounded font-bold border border-amber-700/50"
+                                            >
+                                              + Add Round
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => handleSaveScores(p)}
+                                              className="text-xs bg-green-700 hover:bg-green-600 text-white px-4 py-1.5 rounded font-bold flex items-center gap-1"
+                                            >
+                                              <Save size={14} /> Save Official Scores
+                                            </button>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                               </div>
-                              <button 
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteSlot(slot.id, slotParticipants.length);
-                                }}
-                                className="text-stone-500 hover:text-red-500 p-2 hover:bg-red-900/20 rounded transition"
-                                title="Delete Slot"
-                              >
-                                <Trash2 size={18}/>
-                              </button>
-                            </div>
-                         </div>
-
-                         {isExpanded && (
-                           <div className="border-t-2 border-amber-700/30 p-4 bg-stone-900/50">
-                             {slotParticipants.length === 0 ? (
-                               <p className="text-stone-500 italic text-xs">No candidates assigned to this slot.</p>
-                             ) : (
-                               <div className="space-y-4">
-                                 {slotParticipants.map(p => {
-                                   const isEditing = editingScoreId === p.id;
-                                   const pStats = calculateStats(p);
-                                   return (
-                                     <div key={p.id} className="bg-stone-950 p-4 rounded border border-stone-800">
-                                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
-                                         <div>
-                                           <div className="font-bold text-amber-100">{p.name}</div>
-                                           <div className="text-xs text-stone-400">
-                                             {p.email} · {p.gender} · Ticket: <span className="text-amber-400 font-mono">{p.ticketId}</span>
-                                           </div>
-                                         </div>
-                                         <div className="flex items-center gap-3">
-                                           <div className="text-right">
-                                             <div className="text-xs text-stone-400">Score</div>
-                                             <div className="font-bold text-amber-400">{pStats.totalScore.toFixed(1)}</div>
-                                           </div>
-                                           <button 
-                                             type="button" 
-                                             onClick={() => setEditingScoreId(isEditing ? null : p.id)}
-                                             className="text-xs bg-amber-700 hover:bg-amber-600 text-white px-3 py-1.5 rounded font-bold transition"
-                                           >
-                                             {isEditing ? 'Close Scoring' : 'Enter Scores'}
-                                           </button>
-                                         </div>
-                                       </div>
-
-                                       {isEditing && (
-                                         <div className="mt-4 pt-4 border-t border-stone-800 space-y-4 animate-in fade-in">
-                                           {(p.scorecards || []).map((card, cIdx) => (
-                                             <div key={cIdx} className="bg-stone-900 p-3 rounded border border-stone-700 text-xs">
-                                               <div className="flex justify-between items-center mb-2">
-                                                 <span className="font-bold text-amber-300">Round #{cIdx + 1}</span>
-                                                 <label className="flex items-center gap-1 text-red-400 cursor-pointer">
-                                                   <input 
-                                                     type="checkbox" 
-                                                     checked={card.isDQ || false} 
-                                                     onChange={e => handleScoreChange(p.id, cIdx, 'isDQ', e.target.checked)}
-                                                   />
-                                                   Disqualify
-                                                 </label>
-                                               </div>
-                                               <div className="grid grid-cols-5 sm:grid-cols-10 gap-1.5 mb-2">
-                                                 {Array(10).fill(0).map((_, shotIdx) => (
-                                                   <input 
-                                                     key={shotIdx}
-                                                     type="number"
-                                                     step="0.1"
-                                                     min="0"
-                                                     max="10.9"
-                                                     placeholder={`S${shotIdx+1}`}
-                                                     className="w-full bg-stone-950 border border-stone-700 p-1 text-center text-amber-100 rounded text-xs"
-                                                     value={card.scores?.[shotIdx] ?? ''}
-                                                     onChange={e => {
-                                                       const newScores = [...(card.scores || Array(10).fill(''))];
-                                                       newScores[shotIdx] = e.target.value;
-                                                       handleScoreChange(p.id, cIdx, 'scores', newScores);
-                                                     }}
-                                                   />
-                                                 ))}
-                                               </div>
-                                               <div className="flex items-center gap-2">
-                                                 <span className="text-stone-400">Penalty:</span>
-                                                 <input 
-                                                   type="number" 
-                                                   min="0" 
-                                                   className="w-16 bg-stone-950 border border-stone-700 p-1 text-xs text-red-400 rounded"
-                                                   value={card.penalty || ''}
-                                                   onChange={e => handleScoreChange(p.id, cIdx, 'penalty', e.target.value)}
-                                                 />
-                                               </div>
-                                             </div>
-                                           ))}
-                                           <div className="flex gap-2">
-                                             <button 
-                                               type="button" 
-                                               onClick={() => handleAddScorecard(p.id)}
-                                               className="text-xs bg-stone-800 hover:bg-stone-700 text-amber-300 px-3 py-1.5 rounded font-bold border border-amber-700/50"
-                                             >
-                                               + Add Round
-                                             </button>
-                                             <button 
-                                               type="button" 
-                                               onClick={() => handleSaveScores(p)}
-                                               className="text-xs bg-green-700 hover:bg-green-600 text-white px-4 py-1.5 rounded font-bold flex items-center gap-1"
-                                             >
-                                               <Save size={14}/> Save Official Scores
-                                             </button>
-                                           </div>
-                                         </div>
-                                       )}
-                                     </div>
-                                   );
-                                 })}
-                               </div>
-                             )}
-                           </div>
-                         )}
-                       </div>
-                     );
-                   })}
-                 </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -2394,7 +2778,7 @@ return (
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 pb-4 border-b border-amber-700/40">
                     <div>
                       <h3 className="text-xl font-black text-amber-400 flex items-center gap-2 uppercase">
-                        <QrCode size={22}/> Range Entry QR Check-In Desk
+                        <QrCode size={22} /> Range Entry QR Check-In Desk
                       </h3>
                       <p className="text-xs text-stone-400 mt-1">
                         Scan candidate event passes or query Ticket ID to confirm gate entry credentials in real-time.
@@ -2403,7 +2787,7 @@ return (
 
                     {checkInFeedback && (
                       <div className={`text-xs px-3.5 py-2 rounded font-bold flex items-center gap-2 ${checkInFeedback.type === 'success' ? 'bg-green-900/70 text-green-300 border border-green-500' : 'bg-red-900/70 text-red-300 border border-red-500'}`}>
-                        {checkInFeedback.type === 'success' ? <CheckCircle size={15}/> : <AlertTriangle size={15}/>}
+                        {checkInFeedback.type === 'success' ? <CheckCircle size={15} /> : <AlertTriangle size={15} />}
                         {checkInFeedback.text || checkInFeedback.msg}
                       </div>
                     )}
@@ -2415,17 +2799,17 @@ return (
                       <div className="bg-stone-900 p-4 rounded border border-amber-700/50 shadow-inner">
                         <div className="flex justify-between items-center mb-3">
                           <span className="text-xs font-bold uppercase tracking-wider text-amber-300 flex items-center gap-2">
-                            <Camera size={16}/> Live Camera Scanner
+                            <Camera size={16} /> Live Camera Scanner
                           </span>
                           <div className="flex items-center gap-2">
                             {scannerRunning && (
                               <button
                                 type="button"
                                 onClick={toggleCameraFacing}
-                                className="px-2.5 py-1 text-[11px] bg-stone-800 hover:bg-stone-700 text-amber-300 rounded border border-amber-700/60 flex items-center gap-1 transition"
-                                title="Flip Front / Rear Camera"
+                                className="px-2.5 py-1 text-[11px] bg-stone-800 hover:bg-stone-700 text-amber-300 rounded border border-amber-700/60 flex items-center gap-1 transition shadow-sm active:scale-95"
+                                title="Flip Front / Rear Camera Lens"
                               >
-                                <RefreshCw size={11}/> {cameraFacing === 'environment' ? 'Rear Cam' : 'Front Cam'}
+                                <RefreshCw size={11} /> {cameraFacing === 'environment' ? 'Rear Cam' : 'Front Cam'}
                               </button>
                             )}
                             {scannerRunning ? (
@@ -2439,12 +2823,19 @@ return (
                         </div>
 
                         {/* Scanner Target Container */}
-                        <div id="admin-qr-reader" className="w-full bg-black/80 rounded border-2 border-stone-800 min-h-[220px] flex items-center justify-center overflow-hidden relative shadow-inner">
+                        <div className="w-full bg-stone-950 rounded border-2 border-stone-800 min-h-[260px] flex flex-col items-center justify-center overflow-hidden relative shadow-inner">
+                          {/* Dedicated empty DOM container for Html5Qrcode - NO REACT CHILDREN */}
+                          <div
+                            id="admin-qr-reader"
+                            className="w-full"
+                            style={{ display: scannerRunning ? 'block' : 'none', minHeight: scannerRunning ? '240px' : '0px' }}
+                          />
+
                           {!scannerRunning && (
                             <div className="text-center p-6 text-stone-500">
-                              <QrCode size={48} className="mx-auto mb-2 text-amber-500/40"/>
+                              <QrCode size={48} className="mx-auto mb-2 text-amber-500/40" />
                               <p className="text-xs text-stone-400 font-medium">Camera in standby mode.</p>
-                              <p className="text-[10px] text-stone-500 mt-1">Tap below to activate lens or snap a photo of the QR.</p>
+                              <p className="text-[10px] text-stone-500 mt-1">Tap below to activate rear camera or snap a photo of the QR.</p>
                             </div>
                           )}
                         </div>
@@ -2452,20 +2843,20 @@ return (
                         {/* Scanner Controls */}
                         <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                           {!scannerRunning ? (
-                            <button 
-                              type="button" 
-                              onClick={() => startScanner()} 
+                            <button
+                              type="button"
+                              onClick={() => startScanner()}
                               className="w-full bg-amber-700 hover:bg-amber-600 text-white font-bold py-3 rounded-sm transition flex items-center justify-center gap-2 border border-amber-500 shadow-md text-xs tracking-wider uppercase"
                             >
-                              <Camera size={16}/> START CAMERA SCANNER
+                              <Camera size={16} /> START CAMERA SCANNER
                             </button>
                           ) : (
-                            <button 
-                              type="button" 
-                              onClick={stopScanner} 
+                            <button
+                              type="button"
+                              onClick={stopScanner}
                               className="w-full bg-red-800 hover:bg-red-700 text-white font-bold py-3 rounded-sm transition flex items-center justify-center gap-2 border border-red-600 shadow-md text-xs tracking-wider uppercase"
                             >
-                              <XCircle size={16}/> STOP SCANNER
+                              <XCircle size={16} /> STOP SCANNER
                             </button>
                           )}
 
@@ -2475,15 +2866,15 @@ return (
                             onClick={() => qrFileInputRef.current && qrFileInputRef.current.click()}
                             className="w-full bg-stone-800 hover:bg-stone-700 text-amber-200 font-bold py-3 rounded-sm transition flex items-center justify-center gap-2 border border-amber-700/50 text-xs tracking-wider uppercase"
                           >
-                            <ImageIcon size={16}/> SNAP / UPLOAD QR PHOTO
+                            <ImageIcon size={16} /> SNAP / UPLOAD QR PHOTO
                           </button>
-                          <input 
+                          <input
                             ref={qrFileInputRef}
-                            type="file" 
-                            accept="image/*" 
+                            type="file"
+                            accept="image/*"
                             capture="environment"
                             onChange={handleImageFileScan}
-                            className="hidden" 
+                            className="hidden"
                           />
                         </div>
                       </div>
@@ -2494,15 +2885,15 @@ return (
                           Manual Token / Ticket ID Search
                         </label>
                         <form onSubmit={handleManualLookup} className="flex gap-2">
-                          <input 
-                            type="text" 
-                            placeholder="Enter TKT-XXXXXX, Token, or Email..." 
-                            value={lookupQuery} 
-                            onChange={e => setLookupQuery(e.target.value)} 
+                          <input
+                            type="text"
+                            placeholder="Enter TKT-XXXXXX, Token, or Email..."
+                            value={lookupQuery}
+                            onChange={e => setLookupQuery(e.target.value)}
                             className="flex-1 bg-stone-950 border border-stone-700 px-3.5 py-2.5 text-sm text-amber-100 rounded-sm outline-none focus:border-amber-500 font-mono placeholder:text-stone-600"
                           />
-                          <button 
-                            type="submit" 
+                          <button
+                            type="submit"
                             className="bg-amber-700 hover:bg-amber-600 text-white px-5 py-2.5 text-xs font-bold rounded-sm border border-amber-600 transition tracking-wider uppercase"
                           >
                             VERIFY
@@ -2513,7 +2904,7 @@ return (
                       {/* Mobile Permission & Usage Guide */}
                       <div className="bg-stone-950/80 p-3.5 rounded border border-stone-800 text-[11px] text-stone-400 space-y-1">
                         <div className="font-bold text-amber-300 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
-                          <Smartphone size={13}/> Mobile Camera Usage Tips:
+                          <Smartphone size={13} /> Mobile Camera Usage Tips:
                         </div>
                         <p>• When starting the camera, your mobile browser will ask: <strong className="text-stone-300">"Allow Camera Access?"</strong> ➔ tap <strong>Allow</strong>.</p>
                         <p>• If accessing via Wi-Fi network without HTTPS, use the <strong className="text-amber-300">"Snap / Upload QR Photo"</strong> button which works immediately on all devices without camera permission blocks.</p>
@@ -2533,7 +2924,7 @@ return (
 
                       {!lookupResult && (
                         <div className="bg-stone-900/60 border-2 border-dashed border-stone-700 rounded p-8 text-center text-stone-500 min-h-[280px] flex flex-col items-center justify-center">
-                          <Shield size={44} className="mb-3 opacity-30 text-amber-500"/>
+                          <Shield size={44} className="mb-3 opacity-30 text-amber-500" />
                           <p className="text-sm font-bold text-stone-400 uppercase tracking-wider">Awaiting Pass Scan</p>
                           <p className="text-xs text-stone-500 mt-1 max-w-xs">
                             Scan a QR code pass with the camera or query a Ticket ID to load the candidate's gate pass.
@@ -2544,7 +2935,7 @@ return (
                       {lookupResult && lookupResult.status === 'VALID' && (
                         <div className="bg-stone-900 border-2 border-green-500 rounded p-6 shadow-2xl shadow-green-950/50 animate-in fade-in">
                           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-green-900/60 text-green-400 font-bold text-xs border border-green-500 mb-4">
-                            <CheckCircle size={15}/> VALID EVENT PASS · CLEARED FOR ENTRY
+                            <CheckCircle size={15} /> VALID EVENT PASS · CLEARED FOR ENTRY
                           </div>
 
                           <div className="space-y-3 mb-6">
@@ -2564,7 +2955,7 @@ return (
                               </div>
                               <div>
                                 <span className="text-stone-400 uppercase block text-[10px]">Mission Date</span>
-                                <span className="text-amber-200 font-medium">{lookupResult.participant.slotDate || '5th Dec'}</span>
+                                <span className="text-amber-200 font-medium">{lookupResult.participant.slotDate || '26th September'}</span>
                               </div>
                               <div>
                                 <span className="text-stone-400 uppercase block text-[10px]">Ticket ID</span>
@@ -2577,16 +2968,16 @@ return (
                             </div>
                           </div>
 
-                          <button 
-                            onClick={() => handleConfirmCheckIn(lookupResult.participant)} 
+                          <button
+                            onClick={() => handleConfirmCheckIn(lookupResult.participant)}
                             disabled={checkInLoading}
                             className="w-full bg-green-600 hover:bg-green-500 text-white font-black py-4 rounded-sm transition uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-green-400 shadow-xl shadow-green-900/40 text-sm"
                           >
-                            {checkInLoading ? <RefreshCw className="animate-spin" size={18}/> : <CheckCircle size={18}/>}
+                            {checkInLoading ? <RefreshCw className="animate-spin" size={18} /> : <CheckCircle size={18} />}
                             CONFIRM ENTRY CHECK-IN
                           </button>
 
-                          <button 
+                          <button
                             onClick={resetCheckInState}
                             className="w-full mt-2.5 bg-stone-800 hover:bg-stone-750 text-stone-400 hover:text-stone-200 text-xs font-bold py-2.5 rounded-sm transition uppercase tracking-wider"
                           >
@@ -2598,7 +2989,7 @@ return (
                       {lookupResult && lookupResult.status === 'ALREADY_CHECKED_IN' && (
                         <div className="bg-stone-900 border-2 border-amber-500 rounded p-6 shadow-xl shadow-amber-950/40 animate-in fade-in">
                           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-amber-900/50 text-amber-400 font-bold text-xs border border-amber-500 mb-4">
-                            <AlertTriangle size={14}/> CANDIDATE ALREADY CHECKED IN
+                            <AlertTriangle size={14} /> CANDIDATE ALREADY CHECKED IN
                           </div>
 
                           <div className="space-y-3 mb-6">
@@ -2614,7 +3005,7 @@ return (
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-stone-400 uppercase">Duty Slot:</span>
-                                <span className="text-amber-200 font-bold">{lookupResult.participant.slotTime} ({lookupResult.participant.slotDate || '5th Dec'})</span>
+                                <span className="text-amber-200 font-bold">{lookupResult.participant.slotTime} ({lookupResult.participant.slotDate || '26th September'})</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-stone-400 uppercase">Ticket ID:</span>
@@ -2627,7 +3018,7 @@ return (
                             </div>
                           </div>
 
-                          <button 
+                          <button
                             onClick={resetCheckInState}
                             className="w-full bg-amber-700 hover:bg-amber-600 text-white font-bold py-3 rounded-sm transition uppercase tracking-wider text-xs"
                           >
@@ -2639,14 +3030,14 @@ return (
                       {lookupResult && lookupResult.status === 'INVALID' && (
                         <div className="bg-stone-900 border-2 border-red-500 rounded p-6 shadow-xl shadow-red-950/40 animate-in fade-in">
                           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-red-900/50 text-red-300 font-bold text-xs border border-red-500 mb-4">
-                            <XCircle size={14}/> INVALID / UNRECOGNIZED PASS
+                            <XCircle size={14} /> INVALID / UNRECOGNIZED PASS
                           </div>
 
                           <p className="text-xs text-stone-300 mb-4">
                             {lookupResult.errorMsg}
                           </p>
 
-                          <button 
+                          <button
                             onClick={resetCheckInState}
                             className="w-full bg-stone-800 hover:bg-stone-700 text-stone-300 font-bold py-3 rounded-sm transition uppercase tracking-wider text-xs"
                           >
@@ -2703,7 +3094,7 @@ return (
                           </td>
                           <td className="p-3 text-right">
                             <button onClick={() => handleDeleteParticipant(p.id, p.slotId)} className="text-red-500 hover:text-white p-1">
-                              <Trash2 size={16}/>
+                              <Trash2 size={16} />
                             </button>
                           </td>
                         </tr>
@@ -2718,43 +3109,84 @@ return (
             {adminTab === 'access' && (
               <div className="bg-stone-800/80 border-2 border-amber-700 rounded-sm p-6 shadow-2xl space-y-6">
                 <h3 className="text-xl font-black text-amber-400 flex items-center gap-2 uppercase">
-                  <Lock size={22}/> Whitelist Access Control
+                  <Lock size={22} /> Whitelist Access Control
                 </h3>
-                
-                <div className="grid md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-xs font-bold text-amber-200/80 mb-2 uppercase">Add Single Email</label>
-                    <form onSubmit={handleAddAllowedEmail} className="flex gap-2">
-                      <input 
-                        type="email" 
-                        placeholder="new.candidate@rvce.edu.in"
-                        value={newAllowedEmail} 
-                        onChange={e => setNewAllowedEmail(e.target.value)} 
-                        className="flex-1 bg-stone-900 border border-stone-700 px-3 py-2 text-xs text-amber-100 rounded-sm outline-none focus:border-amber-500"
-                      />
-                      <button className="bg-amber-700 hover:bg-amber-600 text-white px-4 py-2 text-xs font-bold rounded-sm">
-                        ADD
-                      </button>
-                    </form>
-                  </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-amber-200/80 mb-2 uppercase">Bulk Import Emails (One per line / CSV)</label>
-                    <textarea 
-                      rows={3}
-                      placeholder="email1@rvce.edu.in&#10;email2@rvce.edu.in"
-                      value={importEmailsText}
-                      onChange={e => setImportEmailsText(e.target.value)}
-                      className="w-full bg-stone-900 border border-stone-700 p-2 text-xs text-amber-100 rounded-sm outline-none focus:border-amber-500 font-mono mb-2"
+                <p className="text-xs text-stone-400 normal-case leading-relaxed mb-4">
+                  Manage which email addresses are authorized to register and book shooting slots. Only whitelisted emails can proceed through slot selection.
+                </p>
+
+                {/* METHOD 1: Single Email Entry */}
+                <div className="bg-stone-900/80 p-5 rounded border border-amber-700/40 space-y-3">
+                  <div className="flex items-center gap-2 border-b border-amber-800/40 pb-2">
+                    <Mail size={16} className="text-amber-400" />
+                    <h4 className="text-xs font-bold text-amber-200 uppercase tracking-wider">Method 1: Add Single Email</h4>
+                  </div>
+                  <form onSubmit={handleAddAllowedEmail} className="flex gap-2">
+                    <input
+                      type="email"
+                      placeholder="new.candidate@rvce.edu.in"
+                      value={newAllowedEmail}
+                      onChange={e => setNewAllowedEmail(e.target.value)}
+                      className="flex-1 bg-stone-950 border-2 border-stone-700 px-3 py-2.5 text-xs text-amber-100 rounded-sm outline-none focus:border-amber-500 font-mono"
                     />
-                    <button 
-                      onClick={handleBulkImportEmails} 
-                      className="bg-amber-700 hover:bg-amber-600 text-white px-4 py-2 text-xs font-bold rounded-sm flex items-center gap-2"
+                    <button className="bg-amber-700 hover:bg-amber-600 text-white px-5 py-2.5 text-xs font-bold rounded-sm transition border border-amber-500 uppercase tracking-wider">
+                      <Plus size={14} className="inline mr-1" /> ADD
+                    </button>
+                  </form>
+                </div>
+
+                {/* METHOD 2: Bulk Paste */}
+                <div className="bg-stone-900/80 p-5 rounded border border-amber-700/40 space-y-3">
+                  <div className="flex items-center gap-2 border-b border-amber-800/40 pb-2">
+                    <ListPlus size={16} className="text-amber-400" />
+                    <h4 className="text-xs font-bold text-amber-200 uppercase tracking-wider">Method 2: Bulk Paste Emails</h4>
+                  </div>
+                  <p className="text-[11px] text-stone-400 normal-case">Paste multiple emails separated by new lines, commas, or semicolons.</p>
+                  <textarea
+                    rows={4}
+                    placeholder={"email1@rvce.edu.in\nemail2@rvce.edu.in\nemail3@rvce.edu.in"}
+                    value={importEmailsText}
+                    onChange={e => setImportEmailsText(e.target.value)}
+                    className="w-full bg-stone-950 border-2 border-stone-700 p-3 text-xs text-amber-100 rounded-sm outline-none focus:border-amber-500 font-mono"
+                  />
+                  <button
+                    onClick={handleBulkImportEmails}
+                    className="bg-amber-700 hover:bg-amber-600 text-white px-5 py-2.5 text-xs font-bold rounded-sm flex items-center gap-2 transition border border-amber-500 uppercase tracking-wider"
+                    disabled={processingAction || !importEmailsText.trim()}
+                  >
+                    <Upload size={14} /> Import Pasted Emails
+                  </button>
+                </div>
+
+                {/* METHOD 3: File Upload (CSV / Excel) */}
+                <div className="bg-stone-900/80 p-5 rounded border border-amber-700/40 space-y-3">
+                  <div className="flex items-center gap-2 border-b border-amber-800/40 pb-2">
+                    <FileSpreadsheet size={16} className="text-amber-400" />
+                    <h4 className="text-xs font-bold text-amber-200 uppercase tracking-wider">Method 3: Upload CSV / Excel File</h4>
+                  </div>
+                  <p className="text-[11px] text-stone-400 normal-case">
+                    Upload a <strong className="text-amber-300">.csv</strong>, <strong className="text-amber-300">.txt</strong>, or <strong className="text-amber-300">.xlsx</strong> file containing email addresses. The system will automatically detect and extract all valid emails from any column.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => emailFileInputRef.current && emailFileInputRef.current.click()}
+                      className="bg-amber-700 hover:bg-amber-600 text-white px-5 py-3 text-xs font-bold rounded-sm flex items-center gap-2 transition border border-amber-500 uppercase tracking-wider shadow-md"
                       disabled={processingAction}
                     >
-                      <Upload size={14}/> Bulk Import
+                      {processingAction ? <RefreshCw size={14} className="animate-spin" /> : <Upload size={14} />}
+                      {processingAction ? 'PROCESSING FILE...' : 'SELECT & UPLOAD FILE'}
                     </button>
+                    <span className="text-[10px] text-stone-500 font-mono">.csv / .txt / .xlsx</span>
                   </div>
+                  <input
+                    ref={emailFileInputRef}
+                    type="file"
+                    accept=".csv,.txt,.xlsx,.xls"
+                    onChange={handleFileEmailImport}
+                    className="hidden"
+                  />
                 </div>
 
                 <div className="mt-6 border-t border-stone-700 pt-4">
@@ -2766,7 +3198,7 @@ return (
                       <div key={item.id} className="flex justify-between items-center bg-stone-900 px-3 py-1.5 rounded text-xs">
                         <span className="font-mono text-stone-300">{item.email}</span>
                         <button onClick={() => handleDeleteAllowedEmail(item.id)} className="text-stone-500 hover:text-red-400">
-                          <Trash2 size={14}/>
+                          <Trash2 size={14} />
                         </button>
                       </div>
                     ))}
@@ -2785,11 +3217,11 @@ return (
             <button onClick={closeSuccessModal} className="absolute top-4 right-4 text-stone-400 hover:text-amber-500 transition">
               <X size={24} />
             </button>
-            
+
             <div className="w-16 h-16 bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-green-500">
               <CheckCircle size={36} className="text-green-500" />
             </div>
-            
+
             <div className="text-xs text-amber-500 font-bold tracking-widest uppercase mb-1">Official Event Pass</div>
             <h3 className="text-2xl font-black text-white mb-4 uppercase tracking-wider">Mission Confirmed</h3>
 
@@ -2824,13 +3256,13 @@ return (
               {/* QR Code Container */}
               <div className="bg-white p-3 rounded flex flex-col items-center justify-center mx-auto w-fit shadow-inner">
                 {lastBookedPass?.qrToken ? (
-                  <QRCodeSVG 
-                    value={lastBookedPass.qrToken} 
-                    size={150} 
-                    bgColor="#ffffff" 
-                    fgColor="#1c1917" 
-                    level="H" 
-                    includeMargin={false} 
+                  <QRCodeSVG
+                    value={lastBookedPass.qrToken}
+                    size={150}
+                    bgColor="#ffffff"
+                    fgColor="#1c1917"
+                    level="H"
+                    includeMargin={false}
                   />
                 ) : (
                   <div className="w-[150px] h-[150px] flex items-center justify-center text-xs text-stone-600 font-mono">QR Not Available</div>
@@ -2845,15 +3277,15 @@ return (
               Your slot has been successfully booked. You can now access your full event pass, QR token, and live scores.
             </p>
 
-            <button 
+            <button
               onClick={() => {
                 setActiveProfileQuery(lastBookedPass?.email || lastBookedTicket || '');
                 setShowSuccessModal(false);
                 setView('profile');
-              }} 
+              }}
               className="w-full bg-amber-700 hover:bg-amber-600 text-white font-bold py-3.5 rounded-sm transition uppercase tracking-widest border-2 border-amber-600 shadow-lg mb-2 flex items-center justify-center gap-2 text-sm"
             >
-              <Ticket size={18}/> View Full Event Pass & Dossier
+              <Ticket size={18} /> View Full Event Pass & Dossier
             </button>
 
             <button onClick={closeSuccessModal} className="w-full bg-stone-800 hover:bg-stone-700 text-stone-400 font-bold py-2.5 rounded-sm transition uppercase tracking-widest text-xs">
@@ -2865,14 +3297,14 @@ return (
 
       {/* DEBUG FOOTER */}
       <footer className="bg-stone-950 border-t border-stone-800 p-2 text-[10px] text-stone-500 flex justify-between items-center z-50">
-         <div className="flex gap-4">
-           <span className={`flex items-center gap-1 ${auth.currentUser ? 'text-green-500' : 'text-red-500'}`}>
-             {auth.currentUser ? <Wifi size={10}/> : <WifiOff size={10}/>} {auth.currentUser ? 'System Online' : 'Disconnected'}
-           </span>
-           <span>Slots Loaded: {slots.length}</span>
-           <span>Emails Loaded: {allowedEmails.length}</span>
-         </div>
-         <div>App ID: {appId}</div>
+        <div className="flex gap-4">
+          <span className={`flex items-center gap-1 ${auth.currentUser ? 'text-green-500' : 'text-red-500'}`}>
+            {auth.currentUser ? <Wifi size={10} /> : <WifiOff size={10} />} {auth.currentUser ? 'System Online' : 'Disconnected'}
+          </span>
+          <span>Slots Loaded: {slots.length}</span>
+          <span>Emails Loaded: {allowedEmails.length}</span>
+        </div>
+        <div>App ID: {appId}</div>
       </footer>
     </div>
   );

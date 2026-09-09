@@ -1,32 +1,56 @@
 /* --- HERO BULLET SHOOT & REVEAL ANIMATIONS --- */
 @keyframes bulletShoot {
   0% {
-    left: 0%;
+    left: -2%;
+    opacity: 0;
+    transform: translateY(-50%) scaleX(0.85);
+  }
+  3% {
     opacity: 1;
+    transform: translateY(-50%) scaleX(1.05);
+  }
+  85% {
+    opacity: 1;
+    transform: translateY(-50%) scaleX(1);
+  }
+  96% {
+    opacity: 0.9;
   }
   100% {
-    left: 100%;
-    opacity: 1;
+    left: 103%;
+    opacity: 0;
+    transform: translateY(-50%) scaleX(0.6);
   }
 }
 
 @keyframes titleReveal {
   0% {
     clip-path: inset(0 100% 0 0);
+    filter: brightness(0.9);
+  }
+  15% {
+    filter: brightness(1.25);
+  }
+  85% {
+    filter: brightness(1.1);
   }
   100% {
     clip-path: inset(0 0% 0 0);
+    filter: brightness(1);
   }
 }
 
 .animate-bullet-shoot {
-  animation: bulletShoot 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  will-change: left, opacity;
+  animation: bulletShoot 1.05s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: left, opacity, transform;
+  backface-visibility: hidden;
+  perspective: 1000px;
 }
 
 .animate-title-reveal {
-  animation: titleReveal 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  will-change: clip-path;
+  animation: titleReveal 1.05s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: clip-path, filter;
+  backface-visibility: hidden;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -59,3 +83,42 @@
     margin: 20px auto !important;
   }
 }
+
+/* --- QR CODE SCANNER (MOBILE HARDWARE CAMERA VIEWER) --- */
+#admin-qr-reader {
+  width: 100% !important;
+  max-width: 100% !important;
+  border: none !important;
+  position: relative !important;
+  background: #000000 !important;
+  overflow: hidden !important;
+  border-radius: 6px !important;
+}
+
+#admin-qr-reader video {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100% !important;
+  min-height: 240px !important;
+  max-height: 380px !important;
+  object-fit: cover !important;
+  border-radius: 6px !important;
+  display: block !important;
+  margin: 0 auto !important;
+}
+
+#admin-qr-reader__scan_region {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  position: relative !important;
+  width: 100% !important;
+}
+
+#admin-qr-reader__dashboard_section {
+  display: none !important;
+}
+
+#qr-shaded-region {
+  border-radius: 6px !important;
+}
